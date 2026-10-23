@@ -1,0 +1,12 @@
+appId: app.stacktok.desktop
+productName: StackTok
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+win:
+  target: nsis
+nsis:
+  oneClick: true
+  perMachine: false
