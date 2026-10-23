@@ -138,6 +138,7 @@ export async function uploadVideo(accountId: string, videoPath: string, caption:
         for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) el.dispatchEvent(new (t.startsWith('pointer') ? PointerEvent : MouseEvent)(t, o))
         return true
       })()`)
+    const has = (s: string) => evalJs(`(() => { const e = document.querySelector(${J(SELECTORS.caption)}); return !!e && e.innerText.includes(${J(s)}) })()`)
     const missed: string[] = []
     async function addTag(tag: string) {
       await caret()
@@ -155,11 +156,21 @@ export async function uploadVideo(accountId: string, videoPath: string, caption:
       const lines = part.split('\n')
       for (let i = 0; i < lines.length; i++) {
         await caret()
+        await sleep(120) // let the editor register the new selection before typing
         if (i) await press('Enter', 'Enter', 13, { text: '\r' })
-        if (lines[i]) await cdp('Input.insertText', { text: lines[i] })
+        if (lines[i]) {
+          // Same insertion path as the hashtag letters; fall back to CDP text input if the editor ignored it.
+          await evalJs(`document.execCommand('insertText', false, ${J(lines[i])})`)
+          const tail = lines[i].trim().slice(-12)
+          if (tail && !(await has(tail))) await cdp('Input.insertText', { text: lines[i] })
+        }
       }
     }
     if (missed.length) h.log(`Нет подсказки TikTok, хэштеги пропущены: ${missed.join(' ')}`)
+    // Never post with the description missing: check the editor really holds the caption text.
+    const plain = caption.replace(/#[\p{L}\p{N}_]+/gu, '').trim().split('\n')[0].trim()
+    if (plain && !(await has(plain.slice(0, 12))))
+      return pause('Описание не попало в поле. Введите его вручную в открытом окне и продолжите.')
     await sleep(500)
 
     h.log('Публикую')
