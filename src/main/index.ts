@@ -4,8 +4,8 @@ import { statSync } from 'node:fs'
 import { basename, extname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseTags } from '../shared/logic'
-import { AccountView, Bounds, LogEntry, Settings, VideoInfo } from '../shared/types'
-import { Browse, sessionState } from './browse'
+import { AccountView, Bounds, LogEntry, SessionState, Settings, VideoInfo } from '../shared/types'
+import { Browse, configureSession, sessionState } from './browse'
 import { Queue } from './queue'
 import { Store } from './store'
 import { uploadVideo } from './uploader'
@@ -42,9 +42,23 @@ function videoInfo(path: unknown): VideoInfo {
 }
 
 // ---------- state push ----------
-async function snapshot() {
+// Login state is cached and refreshed the moment a session cookie changes, so every push is synchronous.
+const sessions = new Map<string, SessionState>()
+const watched = new Set<string>()
+async function refreshSession(id: string) {
+  const next = await sessionState(id)
+  if (sessions.get(id) !== next) { sessions.set(id, next); push() }
+}
+function watchSession(id: string) {
+  if (watched.has(id)) return
+  watched.add(id)
+  configureSession(id).cookies.on('changed', (_e, c) => { if (c.name === 'sessionid') refreshSession(id) })
+  refreshSession(id)
+}
+
+function snapshot() {
   const d = store.data
-  const accounts: AccountView[] = await Promise.all(d.accounts.map(async (a) => ({ ...a, session: await sessionState(a.id) })))
+  const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
   return {
     accounts, presets: d.presets, templates: d.templates, tasks: d.tasks, settings: d.settings,
     activeAccountId: d.activeAccountId, overdue: queue.overdueIds(), summary: queue.summary(),
@@ -53,12 +67,12 @@ async function snapshot() {
 }
 let pushing = false
 function push() {
-  if (pushing || win?.isDestroyed()) return
+  if (pushing || !win || win.isDestroyed()) return
   pushing = true
-  setTimeout(async () => {
+  queueMicrotask(() => { // coalesces bursts of changes into one immediate update
     pushing = false
-    if (!win.isDestroyed()) win.webContents.send('stacktok:state', await snapshot())
-  }, 50)
+    if (!win.isDestroyed()) win.webContents.send('stacktok:state', snapshot())
+  })
 }
 
 function account(id: unknown) {
@@ -83,6 +97,7 @@ const handlers: Record<string, Handler> = {
     need(isStr(a?.label, 60), 'Введите название.')
     const acc = { id: randomUUID(), label: a.label.trim(), verified: false, defaultPresetIds: [], createdAt: Date.now() }
     store.data.accounts.push(acc)
+    watchSession(acc.id)
     select(acc.id)
     return acc.id
   },
@@ -207,7 +222,7 @@ function registerIpc() {
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 980, minHeight: 600,
-    backgroundColor: '#0b0b0d', title: 'StackTok',
+    backgroundColor: '#0b0b0d', title: 'StackTok', icon: join(__dirname, '../../build/icon.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#0b0b0d', symbolColor: '#a1a1aa', height: 36 },
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
@@ -246,6 +261,7 @@ app.whenReady().then(() => {
     push
   )
   registerIpc()
+  store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()
   queue.startScheduler(DEV && Number(process.env.STACKTOK_TICK_MS) || undefined)
 })

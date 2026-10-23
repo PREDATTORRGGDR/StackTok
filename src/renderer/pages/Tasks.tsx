@@ -28,6 +28,7 @@ function TaskRow({ t, s }: { t: Task; s: AppState }) {
           <div className="muted small">
             {acct?.label ?? 'Аккаунт удалён'}
             {t.scheduledAt ? ` · ${formatLocal(t.scheduledAt)}` : ''}
+            {t.status === 'uploading' && t.step ? ` · ${t.step}…` : ''}
           </div>
         </div>
         {overdue && <span className="badge warn">Просрочено</span>}

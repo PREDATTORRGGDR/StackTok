@@ -41,9 +41,11 @@ const server = http.createServer((req, res) => {
       <button data-e2e="post_video_button" disabled>Post</button>
       <script>
         const f = document.getElementById('f'), btn = document.querySelector('button'), ed = document.querySelector('[contenteditable]')
-        f.onchange = () => { const p = document.createElement('div'); p.className = 'uploading-now'; document.body.append(p); setTimeout(() => { p.remove(); btn.disabled = false }, 500) }
+        let tags = 0
+        ed.addEventListener('input', (e) => { const s = ed.textContent.split(String.fromCharCode(160)).join(' '); if (e.data && !e.data.trim() && s.endsWith(' ') && s.trimEnd().split(' ').pop().startsWith('#')) tags++ })
+        f.onchange = () => { ed.innerText = 'fake'; const p = document.createElement('div'); p.className = 'uploading-now'; document.body.append(p); setTimeout(() => { p.remove(); btn.disabled = false }, 500) }
         btn.onclick = async () => {
-          await fetch('/__post', { method: 'POST', body: JSON.stringify({ caption: ed.innerText, file: f.files[0] && f.files[0].name }) })
+          await fetch('/__post', { method: 'POST', body: JSON.stringify({ caption: ed.innerText, tags, file: f.files[0] && f.files[0].name }) })
           if (${JSON.stringify(scenario)} !== 'silent') location.href = '/tiktokstudio/content'
         }
       </script>`)
@@ -147,6 +149,8 @@ try {
   const pa = seen.posts.find((p) => p.caption.includes('Caption for A'))
   const pb = seen.posts.find((p) => p.caption.includes('second line'))
   check(!!pa && !!pb && pa.cookie !== pb.cookie && pa.file === 'fake.mp4', '6b each post used its own account session and caption', JSON.stringify(seen.posts))
+  check(pa.caption.trim() === 'Caption for A #fyp' && !/fake/.test(pa.caption), '6d pre-filled file name is removed from the caption', JSON.stringify(pa.caption))
+  check(pa.tags === 1, '6e hashtag is typed key by key and committed with a space', String(pa.tags))
   check(pb?.caption.includes('Caption for B') && pb.caption.includes('second line'), '6c multi-line caption entered')
 
   // 9/10b. unconfirmed outcome -> needs_verification, never auto-resubmitted

@@ -32,6 +32,7 @@ export interface Task {
   submitted: boolean // the Post button was clicked at least once -> never auto-retry
   error?: string
   confirmation?: string
+  step?: string // live progress while uploading (not persisted)
   createdAt: number
   updatedAt: number
 }

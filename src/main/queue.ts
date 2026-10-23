@@ -134,13 +134,14 @@ export class Queue {
 
   private async execute(t: Task) {
     this.move(t, 'uploading', { attempts: t.attempts + 1, error: undefined })
-    const log = (m: string) => { this.logs.push({ t: this.now(), msg: `${t.id.slice(0, 6)} ${m}` }); this.logs = this.logs.slice(-200); this.changed() }
+    const log = (m: string) => { t.step = m; this.logs.push({ t: this.now(), msg: `${t.id.slice(0, 6)} ${m}` }); this.logs = this.logs.slice(-200); this.changed() }
     let o: Outcome
     try {
       o = await this.run(t, { log, markSubmitting: () => { t.submitted = true; this.store.flush() } })
     } catch (e) {
       o = { kind: 'failed', error: (e as Error).message }
     }
+    t.step = undefined
     // After the Post click, an unclear result must never read as a plain failure that invites a retry.
     if (o.kind === 'failed' && t.submitted) o = { kind: 'needs_verification', reason: o.error }
     if (o.kind === 'published') this.move(t, 'published', { confirmation: o.confirmation })
