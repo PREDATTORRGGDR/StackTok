@@ -12,7 +12,8 @@ export const SELECTORS = {
   confirmDialogPost: 'button[data-e2e="confirm_post_button"], .common-modal-footer button',
   challenge: '[id*="captcha" i], [class*="captcha" i], iframe[src*="captcha" i], [class*="verify-bar" i]',
   uploading: '[class*="uploading" i], [role="progressbar"]',
-  suggestions: '[class*="mention" i], [class*="hashtag" i][class*="list" i], [role="listbox"]'
+  suggestion: '.hashtag-suggestion-item',
+  suggestionTopic: '.hash-tag-topic'
 }
 
 export type Outcome =
@@ -124,28 +125,41 @@ export async function uploadVideo(accountId: string, videoPath: string, caption:
       if (await text()) return pause('Не удалось очистить поле описания. Заполните его вручную и продолжите.')
     }
 
-    // Plain text is inserted in one go; hashtags are typed key by key so TikTok turns them into real hashtags.
-    const parts = caption.split(/(#[\p{L}\p{N}_]+)/u)
-    let afterTag = false
-    for (const part of parts) {
-      if (/^#[\p{L}\p{N}_]+$/u.test(part)) {
-        for (const ch of part) { await cdp('Input.dispatchKeyEvent', { type: 'char', text: ch }); await sleep(35) }
-        await waitFor(() => exists(SELECTORS.suggestions), 1500, 100) // suggestion list appears once the tag is recognised
-        await sleep(300)
-        await cdp('Input.dispatchKeyEvent', { type: 'char', text: ' ' }) // the space commits the hashtag
-        await sleep(150)
-        afterTag = true
-        continue
-      }
-      let seg = part
-      if (afterTag && seg.startsWith(' ')) seg = seg.slice(1) // the commit space was already typed
-      afterTag = false
-      const lines = seg.split('\n')
+    // Plain text goes in as-is. Each hashtag is typed letter by letter, then its suggestion is clicked:
+    // only a chosen suggestion becomes a real (highlighted) hashtag in TikTok's editor.
+    const caret = () => evalJs(`(() => { const e = document.querySelector(${J(SELECTORS.caption)}); if (!e) return false; e.focus(); const s = getSelection(); s.selectAllChildren(e); s.collapseToEnd(); return true })()`)
+    const typeChar = (ch: string) => evalJs(`document.execCommand('insertText', false, ${J(ch)})`)
+    const pickSuggestion = (tag: string) =>
+      evalJs(`(() => {
+        const item = [...document.querySelectorAll(${J(SELECTORS.suggestion)})].find((e) => e.textContent.trim().toLowerCase().startsWith(${J(tag.toLowerCase())}))
+        if (!item) return false
+        const el = item.querySelector(${J(SELECTORS.suggestionTopic)}) || item
+        const o = { bubbles: true, cancelable: true, view: window }
+        for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) el.dispatchEvent(new (t.startsWith('pointer') ? PointerEvent : MouseEvent)(t, o))
+        return true
+      })()`)
+    const missed: string[] = []
+    async function addTag(tag: string) {
+      await caret()
+      await sleep(150)
+      for (const ch of tag) { await typeChar(ch); await sleep(20) }
+      const picked = await waitFor(async () => (await pickSuggestion(tag)) && (await sleep(300), true), Math.min(10_000, h.timeoutMs ?? 10_000), 250)
+      if (picked) return
+      await caret() // no suggestion: remove what was typed instead of leaving a plain-text tag
+      for (let i = 0; i < tag.length; i++) { await evalJs(`document.execCommand('delete')`); await sleep(40) }
+      missed.push(tag)
+    }
+
+    for (const part of caption.split(/(#[\p{L}\p{N}_]+)/u)) {
+      if (/^#[\p{L}\p{N}_]+$/u.test(part)) { await addTag(part); continue }
+      const lines = part.split('\n')
       for (let i = 0; i < lines.length; i++) {
+        await caret()
         if (i) await press('Enter', 'Enter', 13, { text: '\r' })
         if (lines[i]) await cdp('Input.insertText', { text: lines[i] })
       }
     }
+    if (missed.length) h.log(`Нет подсказки TikTok, хэштеги пропущены: ${missed.join(' ')}`)
     await sleep(500)
 
     h.log('Публикую')

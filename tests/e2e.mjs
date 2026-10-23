@@ -42,7 +42,20 @@ const server = http.createServer((req, res) => {
       <script>
         const f = document.getElementById('f'), btn = document.querySelector('button'), ed = document.querySelector('[contenteditable]')
         let tags = 0
-        ed.addEventListener('input', (e) => { const s = ed.textContent.split(String.fromCharCode(160)).join(' '); if (e.data && !e.data.trim() && s.endsWith(' ') && s.trimEnd().split(' ').pop().startsWith('#')) tags++ })
+        // Mimics TikTok: a typed #word only becomes a real hashtag after its suggestion is clicked.
+        ed.addEventListener('input', () => {
+          document.querySelectorAll('.hashtag-suggestion-item').forEach((x) => x.remove())
+          const m = /#[^ #]+$/.exec(ed.textContent)
+          if (!m || m[0] === '#nosuggest') return
+          const d = document.createElement('div'); d.className = 'hashtag-suggestion-item'
+          const sp = document.createElement('span'); sp.className = 'hash-tag-topic'; sp.textContent = m[0] + ' 1.2M'
+          sp.addEventListener('click', () => {
+            ed.textContent = ed.textContent.slice(0, -m[0].length)
+            const h = document.createElement('span'); h.className = 'ht'; h.textContent = m[0]
+            ed.append(h, document.createTextNode(' ')); tags++; d.remove()
+          })
+          d.append(sp); document.body.append(d)
+        })
         f.onchange = () => { ed.innerText = 'fake'; const p = document.createElement('div'); p.className = 'uploading-now'; document.body.append(p); setTimeout(() => { p.remove(); btn.disabled = false }, 500) }
         btn.onclick = async () => {
           await fetch('/__post', { method: 'POST', body: JSON.stringify({ caption: ed.innerText, tags, file: f.files[0] && f.files[0].name }) })
@@ -181,10 +194,12 @@ try {
 
   // 8. scheduling in local time
   const when = Date.now() + 2500
-  const [schId] = await api('task:create', { videoPath: VIDEO, mode: 'schedule', scheduledAt: when, items: [{ accountId: A, caption: 'scheduled' }] })
+  const [schId] = await api('task:create', { videoPath: VIDEO, mode: 'schedule', scheduledAt: when, items: [{ accountId: A, caption: 'scheduled #nosuggest' }] })
   const sch = await task(schId)
   check(sch.status === 'scheduled' && sch.scheduledAt === when, '8a scheduled task stores exact epoch time')
-  check((await settle(schId, ['published', 'failed', 'needs_verification'])).status === 'published', '8b scheduler runs it when due')
+  check((await settle(schId, ['published', 'failed', 'needs_verification'], 60000)).status === 'published', '8b scheduler runs it when due')
+  const ps = seen.posts.find((p) => p.caption.includes('scheduled'))
+  check(ps && !ps.caption.includes('#nosuggest') && ps.tags === 0, '6f a tag without a suggestion is removed, not left as plain text', JSON.stringify(ps))
   const pastErr = await evalJs(`window.api.call('task:create', ${JSON.stringify({ videoPath: VIDEO, mode: 'schedule', scheduledAt: Date.now() - 1000, items: [{ accountId: A, caption: 'x' }] })})`)
   check(!pastErr.ok, '8c past schedule time rejected')
 
