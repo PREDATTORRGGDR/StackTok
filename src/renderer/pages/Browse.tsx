@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bug, ExternalLink, Home, RotateCw, ShieldCheck, UserPlus } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bug, ExternalLink, Home, Plus, RotateCw, ShieldCheck, Users } from 'lucide-react'
 import { AccountView } from '@shared/types'
-import { AppState, call } from '../api'
+import { call } from '../api'
+import { Dialog } from '../Dialogs'
+import { Page } from '../App'
 
-export function Browse({ active }: { s: AppState; active?: AccountView }) {
+export function Browse({ active, go, openDialog }: { active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void }) {
   const box = useRef<HTMLDivElement>(null)
   const [confirming, setConfirming] = useState(false)
   const [username, setUsername] = useState('')
   const [avatar, setAvatar] = useState<string>()
   const [covered, setCovered] = useState(false)
+
   useEffect(() => {
     const h = (e: Event) => setCovered((e as CustomEvent<boolean>).detail)
     window.addEventListener('stacktok:modal', h)
     return () => window.removeEventListener('stacktok:modal', h)
   }, [])
 
-  // Report where the native TikTok view should sit; hide it when leaving this page.
+  // Report where the native TikTok view sits; hide it when leaving this page or when a dialog is open.
   useEffect(() => {
     const el = box.current
     if (!el || !active || covered) return
@@ -34,10 +37,14 @@ export function Browse({ active }: { s: AppState; active?: AccountView }) {
 
   if (!active)
     return (
-      <div className="empty" style={{ flex: 1 }}>
-        <UserPlus size={28} />
-        <b style={{ color: 'var(--text)' }}>Добавьте первый аккаунт</b>
-        <span>Нажмите «+» в боковой панели. У каждого аккаунта свой вход.</span>
+      <div className="empty">
+        <div className="orb"><Users size={34} /></div>
+        <h3>Нет активного аккаунта</h3>
+        <p>Добавьте аккаунт или выберите его на вкладке «Аккаунты».</p>
+        <div className="row">
+          <button className="btn primary" onClick={() => openDialog({ kind: 'add' })}><Plus size={16} />Добавить аккаунт</button>
+          <button className="btn" onClick={() => go('accounts')}>К аккаунтам</button>
+        </div>
       </div>
     )
 
@@ -56,33 +63,34 @@ export function Browse({ active }: { s: AppState; active?: AccountView }) {
 
   return (
     <>
-      <div className="toolbar">
-        <button className="btn ghost sm" aria-label="Назад" onClick={() => nav('back')}><ArrowLeft size={15} /></button>
-        <button className="btn ghost sm" aria-label="Вперёд" onClick={() => nav('forward')}><ArrowRight size={15} /></button>
-        <button className="btn ghost sm" aria-label="Обновить" onClick={() => nav('reload')}><RotateCw size={14} /></button>
-        <button className="btn ghost sm" aria-label="Домой" onClick={() => nav('home')}><Home size={15} /></button>
+      <div className="glass toolbar">
+        <button className="btn ghost round" aria-label="Назад" onClick={() => nav('back')}><ArrowLeft size={17} /></button>
+        <button className="btn ghost round" aria-label="Вперёд" onClick={() => nav('forward')}><ArrowRight size={17} /></button>
+        <button className="btn ghost round" aria-label="Обновить" onClick={() => nav('reload')}><RotateCw size={16} /></button>
+        <button className="btn ghost round" aria-label="Домой" onClick={() => nav('home')}><Home size={17} /></button>
         <span style={{ flex: 1 }} />
-        <button className="btn ghost sm" onClick={() => call('browse:external')} title="Если встроенный просмотр заблокирован, откройте в браузере по умолчанию"><ExternalLink size={14} />Открыть в браузере</button>
-        <button className="btn ghost sm" aria-label="Диагностика" title="Инструменты разработчика сессии" onClick={() => call('account:devtools')}><Bug size={14} /></button>
+        <button className="btn ghost sm" onClick={() => call('browse:external')} title="Если встроенный просмотр заблокирован, откройте в браузере по умолчанию"><ExternalLink size={15} />Открыть в браузере</button>
+        <button className="btn ghost round" aria-label="Диагностика" title="Инструменты разработчика сессии" onClick={() => call('account:devtools')}><Bug size={16} /></button>
       </div>
       {signedIn && !active.verified && !confirming && (
-        <div className="banner">
-          <ShieldCheck size={15} />
-          <span>Вход выполнен. Перед публикацией подтвердите, какому аккаунту TikTok принадлежит эта сессия.</span>
+        <div className="glass banner">
+          <ShieldCheck size={18} />
+          <span>Вход выполнен. Подтвердите, какому аккаунту TikTok принадлежит эта сессия.</span>
           <span style={{ flex: 1 }} />
-          <button className="btn sm primary" onClick={startConfirm}>Подтвердить аккаунт</button>
+          <button className="btn primary sm" onClick={startConfirm}>Подтвердить</button>
         </div>
       )}
       {confirming && (
-        <div className="banner">
-          <span>{username ? 'Найден профиль:' : 'Профиль определить не удалось. Введите имя пользователя из TikTok:'}</span>
-          <input className="input" style={{ width: 200 }} placeholder="имя пользователя" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && confirm()} />
-          <button className="btn sm primary" onClick={confirm}>Да, это он</button>
+        <div className="glass banner">
+          <span>{username ? 'Найден профиль:' : 'Не удалось определить профиль. Введите имя пользователя:'}</span>
+          <input className="input" style={{ width: 200, padding: '6px 12px' }} placeholder="имя пользователя" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && confirm()} />
+          <span style={{ flex: 1 }} />
+          <button className="btn primary sm" onClick={confirm}>Да, это он</button>
           <button className="btn sm" onClick={() => setConfirming(false)}>Отмена</button>
         </div>
       )}
-      {!signedIn && <div className="banner"><span>Войдите в TikTok ниже. Вход сохраняется только в профиле этого аккаунта.</span></div>}
-      <div className="viewport" ref={box} />
+      {!signedIn && <div className="glass banner"><span>Войдите в TikTok ниже. Вход сохранится только в профиле этого аккаунта.</span></div>}
+      <div className="glass frame"><div className="viewport" ref={box} /></div>
     </>
   )
 }

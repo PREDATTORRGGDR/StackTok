@@ -1,77 +1,64 @@
-import { useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
-import { parseTags } from '@shared/logic'
-import { Preset } from '@shared/types'
+import { ReactNode } from 'react'
+import { ACCENTS, BACKGROUNDS, Settings, THEMES } from '@shared/types'
 import { AppState, call } from '../api'
 
-function PresetEditor({ p, s }: { p: Preset | null; s: AppState }) {
-  const [name, setName] = useState(p?.name ?? '')
-  const [tags, setTags] = useState(p?.tags.join(' ') ?? '')
-  const parsed = parseTags(tags)
-  const dirty = !p || name !== p.name || parsed.join(' ') !== p.tags.join(' ')
-  return (
-    <div className="row" style={{ alignItems: 'flex-start' }}>
-      <input className="input" style={{ width: 150 }} placeholder="Название набора" value={name} onChange={(e) => setName(e.target.value)} />
-      <textarea className="textarea" style={{ minHeight: 34, height: 34 }} placeholder="#тег #другой" value={tags} onChange={(e) => setTags(e.target.value)} />
-      <button className="btn" disabled={!name.trim() || !dirty} onClick={async () => { await call('preset:save', { id: p?.id, name, tags: parsed }); if (!p) { setName(''); setTags('') } }}>
-        {p ? 'Сохранить' : <><Plus size={14} />Добавить</>}
-      </button>
-      {p && <button className="btn ghost" aria-label="Удалить набор" onClick={() => call('preset:delete', { id: p.id })}><Trash2 size={14} /></button>}
-    </div>
-  )
+const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая', system: 'Системная' }
+const ACCENT_COLOR = { blue: '#4d8dff', violet: '#9b6bff', pink: '#ff5c93', orange: '#ff9340', green: '#35d49a' }
+const BG_LABEL = { aurora: 'Аврора', sunset: 'Закат', ocean: 'Океан', graphite: 'Графит' }
+const BG_GRADIENT = {
+  aurora: 'linear-gradient(135deg,#2f5bff,#8a3dff 55%,#00c2c7)',
+  sunset: 'linear-gradient(135deg,#ff5a7a,#ff9a3d 55%,#8d3dff)',
+  ocean: 'linear-gradient(135deg,#0a84ff,#00c2c7 55%,#3d5bff)',
+  graphite: 'linear-gradient(135deg,#4b5160,#2a2f3b 55%,#646c80)'
 }
 
+const Row = ({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) => (
+  <div className="setting">
+    <div><div className="label">{label}</div>{hint && <div className="hint">{hint}</div>}</div>
+    {children}
+  </div>
+)
+
 export function SettingsPage({ s }: { s: AppState }) {
-  const set = (v: object) => call('settings:set', v)
   const st = s.settings
-  const toggleDefault = (id: string) => set({ defaultPresetIds: st.defaultPresetIds.includes(id) ? st.defaultPresetIds.filter((x) => x !== id) : [...st.defaultPresetIds, id] })
+  const set = (v: Partial<Settings>) => call('settings:set', v)
 
   return (
-    <div className="stack" style={{ maxWidth: 760 }}>
-      <div className="panel stack">
-        <h2>Наборы хэштегов</h2>
-        {s.presets.map((p) => <PresetEditor key={p.id} p={p} s={s} />)}
-        <PresetEditor p={null} s={s} />
-        <span className="muted small">При применении теги очищаются (один «#», без символов) и дубликаты удаляются. Наборы — лишь подсказка и не гарантируют просмотры.</span>
-        {s.presets.length > 0 && (
-          <div><div className="muted small" style={{ marginBottom: 6 }}>Применять по умолчанию на странице публикации</div>
-            <div className="chips">{s.presets.map((p) => <button key={p.id} className={'chip' + (st.defaultPresetIds.includes(p.id) ? ' on' : '')} onClick={() => toggleDefault(p.id)}>{p.name}</button>)}</div></div>
-        )}
-        {s.accounts.length > 0 && s.presets.length > 0 && (
-          <div className="stack" style={{ gap: 6 }}><div className="muted small">Наборы по умолчанию для аккаунтов (добавляются к описанию этого аккаунта)</div>
-            {s.accounts.map((a) => (
-              <div key={a.id} className="row"><span style={{ width: 150 }}>{a.label}</span>
-                <div className="chips">{s.presets.map((p) => {
-                  const on = a.defaultPresetIds.includes(p.id)
-                  return <button key={p.id} className={'chip' + (on ? ' on' : '')} onClick={() => call('account:presets', { id: a.id, presetIds: on ? a.defaultPresetIds.filter((x) => x !== p.id) : [...a.defaultPresetIds, p.id] })}>{p.name}</button>
-                })}</div></div>
-            ))}</div>
-        )}
+    <div className="page" style={{ maxWidth: 760 }}>
+      <div className="page-head"><div><h2>Настройки</h2><p>Внешний вид и поведение приложения.</p></div></div>
+
+      <div className="glass group">
+        <h4>Внешний вид</h4>
+        <Row label="Тема">
+          <div className="seg">{THEMES.map((t) => <button key={t} className={st.theme === t ? 'on' : ''} onClick={() => set({ theme: t })}>{THEME_LABEL[t]}</button>)}</div>
+        </Row>
+        <Row label="Акцентный цвет">
+          <div className="swatches">{ACCENTS.map((a) => <button key={a} aria-label={a} className={'swatch' + (st.accent === a ? ' on' : '')} style={{ background: `linear-gradient(145deg, ${ACCENT_COLOR[a]}, ${ACCENT_COLOR[a]}aa)` }} onClick={() => set({ accent: a })} />)}</div>
+        </Row>
+        <Row label="Фон" hint="Свет, который просвечивает через стекло">
+          <div className="bgs">{BACKGROUNDS.map((b) => <button key={b} className={'bgtile' + (st.background === b ? ' on' : '')} style={{ background: BG_GRADIENT[b] }} onClick={() => set({ background: b })}><span>{BG_LABEL[b]}</span></button>)}</div>
+        </Row>
+        <Row label="Матовость стекла" hint="Сила размытия и плотность панелей">
+          <input className="slider" type="range" min={0} max={100} value={st.glass} style={{ ['--p' as string]: st.glass + '%' }} onChange={(e) => set({ glass: Number(e.target.value) })} />
+        </Row>
       </div>
 
-      {s.templates.length > 0 && (
-        <div className="panel stack"><h2>Шаблоны описаний</h2>
-          {s.templates.map((t) => <div key={t.id} className="row"><b style={{ width: 150 }}>{t.name}</b><span className="muted small" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.text}</span><button className="btn ghost" aria-label="Удалить шаблон" onClick={() => call('template:delete', { id: t.id })}><Trash2 size={14} /></button></div>)}
-        </div>
-      )}
-
-      <div className="panel stack">
-        <h2>Планировщик</h2>
-        <label className="row"><input type="checkbox" checked={st.autoRun} onChange={(e) => set({ autoRun: e.target.checked })} /> Выполнять задачи по расписанию, пока StackTok открыт</label>
-        <label className="row">Параллельные загрузки (только для разных аккаунтов)
-          <select style={{ width: 70 }} value={st.concurrency} onChange={(e) => set({ concurrency: Number(e.target.value) })}>{[1, 2, 3].map((n) => <option key={n}>{n}</option>)}</select></label>
-        <label className="row"><input type="checkbox" checked={st.showAutomationWindow} onChange={(e) => set({ showAutomationWindow: e.target.checked })} /> Показывать окно загрузки во время работы (диагностика)</label>
-        <span className="muted small">Пока приложение закрыто, публикации не выходят. Задачи, срок которых наступил, ждут вашего решения при следующем запуске. Загрузки в одном аккаунте не пересекаются.</span>
+      <div className="glass group">
+        <h4>Поведение</h4>
+        <Row label="Помнить последний аккаунт" hint="При запуске сразу открывать TikTok с прошлого аккаунта">
+          <label className="switch"><input type="checkbox" checked={st.restoreLast} onChange={(e) => set({ restoreLast: e.target.checked })} /><span className="track" /><span className="thumb" /></label>
+        </Row>
       </div>
 
-      <div className="panel stack">
-        <h2>Локальные данные</h2>
-        <span className="small muted">Настройки, очередь и профили браузера аккаунтов хранятся здесь:</span>
-        <code className="small" style={{ wordBreak: 'break-all' }}>{s.dataPath}</code>
-        <div className="row"><button className="btn" onClick={() => call('data:open')}>Открыть папку</button></div>
-        <span className="small muted">Для резервной копии закройте StackTok и скопируйте эту папку (в ней сохранены входы — храните её в тайне). При удалении аккаунта профиль сохраняется, если не выбрать его удаление.</span>
+      <div className="glass group">
+        <h4>Данные</h4>
+        <Row label="Папка данных" hint="Список аккаунтов и профили браузера (входы). Храните копию приватно.">
+          <button className="btn" onClick={() => call('data:open')}>Открыть папку</button>
+        </Row>
+        <div style={{ padding: '0 0 14px' }}><code>{s.dataPath}</code></div>
       </div>
-      <span className="muted small">StackTok {s.version}</span>
+
+      <p className="muted small" style={{ textAlign: 'center' }}>StackTok {s.version}</p>
     </div>
   )
 }

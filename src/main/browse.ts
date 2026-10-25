@@ -52,6 +52,7 @@ export class Browse {
         }
       })
       lockDown(v.webContents)
+      v.setBorderRadius(18) // matches the glass frame around it
       v.webContents.loadURL(HOME_URL).catch(() => {})
       this.views.set(accountId, v)
     }

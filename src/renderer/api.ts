@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react'
-import { AccountView, Bounds, LogEntry, Preset, Settings, Task, Template, VideoInfo } from '@shared/types'
+import { AccountView, Settings } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
-  presets: Preset[]
-  templates: Template[]
-  tasks: Task[]
   settings: Settings
   activeAccountId?: string
-  overdue: string[]
-  summary: { published: number; failed: number; needsAction: number; pending: number }
-  logs: LogEntry[]
   version: string
   dataPath: string
 }
@@ -20,14 +14,13 @@ declare global {
     api: {
       call(channel: string, arg?: unknown): Promise<{ ok: boolean; value?: any; error?: string }>
       onState(cb: (s: AppState) => void): () => void
-      pathFor(f: File): string
     }
   }
 }
 
-type Listener = (t: { text: string; err?: boolean; id: number }[]) => void
-let toasts: { text: string; err?: boolean; id: number }[] = []
-const listeners = new Set<Listener>()
+type Toast = { text: string; err?: boolean; id: number }
+const listeners = new Set<(t: Toast[]) => void>()
+let toasts: Toast[] = []
 export function toast(text: string, err = false) {
   const t = { text, err, id: Math.random() }
   toasts = [...toasts, t]
@@ -43,7 +36,7 @@ export function useToasts() {
 /** Calls a main-process handler. Errors surface as toasts unless `quiet`. */
 export async function call<T = any>(channel: string, arg?: unknown, quiet = false): Promise<T | undefined> {
   const r = await window.api.call(channel, arg)
-  if (!r.ok) { if (!quiet) toast(r.error ?? 'Something went wrong', true); return undefined }
+  if (!r.ok) { if (!quiet) toast(r.error ?? 'Что-то пошло не так', true); return undefined }
   return r.value as T
 }
 
@@ -56,6 +49,3 @@ export function useAppState(): AppState | null {
   }, [])
   return s
 }
-
-export const videoSrc = (p: string) => 'stacktok-media://v/' + encodeURIComponent(p)
-export type { Bounds, VideoInfo }

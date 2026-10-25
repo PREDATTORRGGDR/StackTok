@@ -1,75 +1,42 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { Data, STATUSES, Settings, Task } from '../shared/types'
+import { ACCENTS, BACKGROUNDS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = {
-  concurrency: 1,
-  autoRun: true,
-  defaultPresetIds: [],
-  showAutomationWindow: false
-}
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
-const strings = (v: unknown): string[] => (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === 'string')
-const arr = <T>(v: unknown, f: (x: any) => T | null): T[] =>
-  (Array.isArray(v) ? v : []).map((x) => (x && typeof x === 'object' ? f(x) : null)).filter((x): x is T => x !== null)
+const pick = <T extends string>(v: unknown, list: readonly T[], d: T): T => (list.includes(v as T) ? (v as T) : d)
 
 /** Validates loaded JSON; drops malformed records instead of crashing. */
 export function sanitize(raw: any): Data {
   const r = raw && typeof raw === 'object' ? raw : {}
-  const s = r.settings ?? {}
-  const accounts = arr(r.accounts, (a) =>
-    str(a.id)
-      ? {
-          id: str(a.id),
-          label: str(a.label, 'Account'),
-          username: str(a.username) || undefined,
-          avatar: str(a.avatar) || undefined,
-          verified: a.verified === true,
-          defaultPresetIds: strings(a.defaultPresetIds),
-          createdAt: num(a.createdAt) ?? Date.now()
-        }
-      : null
-  )
-  const tasks = arr<Task>(r.tasks, (t) =>
-    str(t.id) && str(t.accountId) && str(t.videoPath) && (STATUSES as readonly string[]).includes(t.status)
-      ? {
-          id: str(t.id),
-          accountId: str(t.accountId),
-          batchId: str(t.batchId),
-          videoPath: str(t.videoPath),
-          caption: str(t.caption),
-          scheduledAt: num(t.scheduledAt),
-          status: t.status,
-          attempts: num(t.attempts) ?? 0,
-          submitted: t.submitted === true,
-          error: str(t.error) || undefined,
-          confirmation: str(t.confirmation) || undefined,
-          createdAt: num(t.createdAt) ?? Date.now(),
-          updatedAt: num(t.updatedAt) ?? Date.now()
-        }
-      : null
-  )
+  const s = r.settings && typeof r.settings === 'object' ? r.settings : {}
+  const accounts = (Array.isArray(r.accounts) ? r.accounts : [])
+    .filter((a: any) => a && typeof a === 'object' && str(a.id))
+    .map((a: any) => ({
+      id: str(a.id),
+      label: str(a.label, 'Аккаунт'),
+      username: str(a.username) || undefined,
+      avatar: str(a.avatar) || undefined,
+      verified: a.verified === true,
+      createdAt: num(a.createdAt) ?? Date.now()
+    }))
   return {
     version: 1,
     accounts,
-    presets: arr(r.presets, (p) =>
-      str(p.id) ? { id: str(p.id), name: str(p.name, 'Preset'), tags: strings(p.tags) } : null
-    ),
-    templates: arr(r.templates, (t) => (str(t.id) ? { id: str(t.id), name: str(t.name, 'Template'), text: str(t.text) } : null)),
-    tasks,
     settings: {
-      concurrency: Math.min(3, Math.max(1, num(s.concurrency) ?? DEFAULT_SETTINGS.concurrency)),
-      autoRun: s.autoRun !== false,
-      defaultPresetIds: strings(s.defaultPresetIds),
-      showAutomationWindow: s.showAutomationWindow === true
+      theme: pick(s.theme, THEMES, DEFAULT_SETTINGS.theme),
+      accent: pick(s.accent, ACCENTS, DEFAULT_SETTINGS.accent),
+      background: pick(s.background, BACKGROUNDS, DEFAULT_SETTINGS.background),
+      glass: Math.min(100, Math.max(0, num(s.glass) ?? DEFAULT_SETTINGS.glass)),
+      restoreLast: s.restoreLast !== false
     },
-    activeAccountId: str(r.activeAccountId) || undefined
+    activeAccountId: accounts.some((a: any) => a.id === r.activeAccountId) ? r.activeAccountId : undefined
   }
 }
 
-/** Tiny JSON store with atomic writes. Holds metadata only: no cookies, passwords, or videos. */
+/** Tiny JSON store with atomic writes. Holds metadata only: no cookies, passwords, or secrets. */
 export class Store {
   data: Data
   private timer?: NodeJS.Timeout

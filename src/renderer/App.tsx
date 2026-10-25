@@ -1,165 +1,108 @@
-import { useEffect, useState, ReactNode } from 'react'
-import { Activity, CalendarClock, Globe, MoreHorizontal, Plus, Send, Settings as Cog, Layers, Pencil, Trash2, LogIn, Bug, Eraser } from 'lucide-react'
-import { AccountView } from '@shared/types'
+import { useEffect, useState } from 'react'
+import { Globe, Layers, Plus, Settings as Cog, Users } from 'lucide-react'
 import { AppState, call, useAppState, useToasts } from './api'
+import { Dialog, Dialogs } from './Dialogs'
+import { Accounts } from './pages/Accounts'
 import { Browse } from './pages/Browse'
-import { Publish } from './pages/Publish'
-import { Tasks } from './pages/Tasks'
 import { SettingsPage } from './pages/Settings'
+import { Avatar } from './ui'
 
-export type Page = 'browse' | 'publish' | 'scheduled' | 'activity' | 'settings'
-const TITLES: Record<Page, string> = { browse: 'Обзор', publish: 'Публикация', scheduled: 'Запланировано', activity: 'Активность', settings: 'Настройки' }
+export type Page = 'accounts' | 'browse' | 'settings'
+const TITLES: Record<Page, string> = { accounts: 'Аккаунты', browse: 'Обзор', settings: 'Настройки' }
 
-export const initials = (a: { label: string }) => a.label.trim().slice(0, 2).toUpperCase()
-export const Avatar = ({ a }: { a: { label: string; avatar?: string } }) => (
-  <div className="avatar">{a.avatar ? <img src={a.avatar} alt="" referrerPolicy="no-referrer" /> : initials(a)}</div>
-)
-
-export function Modal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+/** Applies theme, accent, background and glass strength to the document. */
+function useAppearance(s: AppState | null) {
+  const set = s?.settings
   useEffect(() => {
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', k)
-    window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: true })) // native web view would draw over the dialog
-    return () => { window.removeEventListener('keydown', k); window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: false })) }
-  }, [onClose])
-  return (
-    <div className="modal-bg" onMouseDown={onClose}>
-      <div className="panel modal stack" onMouseDown={(e) => e.stopPropagation()}>{children}</div>
-    </div>
-  )
-}
-
-type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe'; acct: AccountView }
-
-function Sidebar({ s, page, go }: { s: AppState; page: Page; go: (p: Page) => void }) {
-  const [menu, setMenu] = useState<string | null>(null)
-  const [dialog, setDialog] = useState<Dialog | null>(null)
-  const [text, setText] = useState('')
-  const [wipe, setWipe] = useState(false)
-  const open = (d: Dialog) => { setMenu(null); setText(d.kind === 'add' ? '' : d.kind === 'rename' ? d.acct.label : ''); setWipe(false); setDialog(d) }
-  const close = () => setDialog(null)
-  useEffect(() => { const h = () => setMenu(null); window.addEventListener('click', h); return () => window.removeEventListener('click', h) }, [])
-
-  const waiting = s.tasks.filter((t) => ['awaiting_user', 'needs_verification'].includes(t.status)).length
-  const upcoming = s.tasks.filter((t) => ['scheduled', 'draft', 'ready'].includes(t.status)).length
-  const nav = (p: Page, icon: ReactNode, count?: number) => (
-    <button className={'nav-item' + (page === p ? ' active' : '')} onClick={() => go(p)}>
-      {icon}{TITLES[p]}{count ? <span className="count">{count}</span> : null}
-    </button>
-  )
-
-  async function submit() {
-    if (dialog?.kind === 'add') {
-      if (await call('account:add', { label: text })) { go('browse'); close() }
-    } else if (dialog?.kind === 'rename') {
-      await call('account:rename', { id: dialog.acct.id, label: text }); close()
-    } else if (dialog?.kind === 'remove') {
-      await call('account:remove', { id: dialog.acct.id, wipe }); close()
-    } else if (dialog?.kind === 'wipe') {
-      await call('account:wipe', { id: dialog.acct.id }); close()
+    if (!set) return
+    const mq = matchMedia('(prefers-color-scheme: light)')
+    const apply = () => {
+      const light = set.theme === 'light' || (set.theme === 'system' && mq.matches)
+      const root = document.documentElement
+      root.dataset.theme = light ? 'light' : 'dark'
+      root.dataset.accent = set.accent
+      root.dataset.bg = set.background
+      root.style.setProperty('--blur', 10 + set.glass * 0.4 + 'px')
+      root.style.setProperty('--fill', String((light ? 0.22 + set.glass * 0.004 : 0.035 + set.glass * 0.0012).toFixed(3)))
     }
-  }
-
-  return (
-    <aside className="sidebar">
-      <div className="nav">
-        {nav('browse', <Globe size={15} />)}
-        {nav('publish', <Send size={15} />)}
-        {nav('scheduled', <CalendarClock size={15} />, upcoming)}
-        {nav('activity', <Activity size={15} />, waiting)}
-      </div>
-      <div className="section-title">
-        Аккаунты
-        <button className="btn ghost sm" title="Добавить аккаунт" aria-label="Добавить аккаунт" onClick={() => open({ kind: 'add' })}><Plus size={14} /></button>
-      </div>
-      <div className="accounts">
-        {s.accounts.length === 0 && <div className="muted small" style={{ padding: '6px 10px' }}>Аккаунтов пока нет.</div>}
-        {s.accounts.map((a) => (
-          <div key={a.id} className={'acct' + (a.id === s.activeAccountId ? ' active' : '')} onClick={() => { call('account:select', { id: a.id }); if (page !== 'browse' && page !== 'publish') go('browse') }}>
-            <Avatar a={a} />
-            <div className="meta">
-              <div className="name">{a.label}</div>
-              <div className="sub">
-                <span className={'dot ' + (a.session === 'logged_in' ? 'ok' : 'warn')} />
-                {a.session === 'logged_in' ? (a.verified ? (a.username ? '@' + a.username : 'Вход выполнен') : 'Подтвердите аккаунт') : 'Не авторизован'}
-              </div>
-            </div>
-            <button className={'menu-btn' + (menu === a.id ? ' open' : '')} aria-label="Меню аккаунта" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id) }}><MoreHorizontal size={15} /></button>
-            {menu === a.id && (
-              <div className="menu" onClick={(e) => e.stopPropagation()}>
-                <button onClick={() => open({ kind: 'rename', acct: a })}><Pencil size={13} />Переименовать</button>
-                <button onClick={() => { setMenu(null); call('account:select', { id: a.id }); go('browse') }}><LogIn size={13} />Войти / войти заново</button>
-                <button onClick={() => { setMenu(null); call('account:select', { id: a.id }); go('browse'); setTimeout(() => call('account:devtools'), 200) }}><Bug size={13} />Открыть сессию для диагностики</button>
-                <button onClick={() => open({ kind: 'wipe', acct: a })}><Eraser size={13} />Удалить данные сессии…</button>
-                <button className="danger" onClick={() => open({ kind: 'remove', acct: a })}><Trash2 size={13} />Убрать из списка…</button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-      {nav('settings', <Cog size={15} />)}
-
-      {dialog && (
-        <Modal onClose={close}>
-          {(dialog.kind === 'add' || dialog.kind === 'rename') && (
-            <>
-              <b>{dialog.kind === 'add' ? 'Добавить аккаунт' : 'Переименовать аккаунт'}</b>
-              {dialog.kind === 'add' && <span className="muted small">У аккаунта будет свой изолированный профиль браузера. Далее вы войдёте в TikTok обычным способом.</span>}
-              <input className="input" autoFocus placeholder="Название, например: Основной аккаунт" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && text.trim() && submit()} />
-            </>
-          )}
-          {dialog.kind === 'remove' && (
-            <>
-              <b>Убрать «{dialog.acct.label}»?</b>
-              <span className="muted small">Его задачи в очереди будут отменены. Сохранённый профиль браузера останется на диске, если не отметить галочку ниже.</span>
-              <label className="row small"><input type="checkbox" checked={wipe} onChange={(e) => setWipe(e.target.checked)} /> Также удалить локальные данные сессии (cookies, хранилище, кэш)</label>
-            </>
-          )}
-          {dialog.kind === 'wipe' && (
-            <>
-              <b>Удалить данные сессии «{dialog.acct.label}»?</b>
-              <span className="muted small">Аккаунт будет разлогинен, cookies, хранилище и кэш очистятся. Сам аккаунт останется в списке.</span>
-            </>
-          )}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn" onClick={close}>Отмена</button>
-            <button className={'btn primary'} disabled={(dialog.kind === 'add' || dialog.kind === 'rename') && !text.trim()} onClick={submit}>
-              {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : wipe ? 'Убрать и удалить данные' : 'Убрать'}
-            </button>
-          </div>
-        </Modal>
-      )}
-    </aside>
-  )
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [set?.theme, set?.accent, set?.background, set?.glass])
 }
 
 export function App() {
   const s = useAppState()
-  const [page, setPage] = useState<Page>('browse')
+  const [page, setPage] = useState<Page | null>(null)
+  const [dialog, setDialog] = useState<Dialog | null>(null)
   const toasts = useToasts()
-  if (!s) return null
+  useAppearance(s)
+
+  useEffect(() => { if (s && page === null) setPage(s.settings.restoreLast && s.activeAccountId ? 'browse' : 'accounts') }, [s, page])
+
+  // Ctrl+1..9 jumps straight to an account, Ctrl+N adds one.
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !s) return
+      if (e.key === 'n') { e.preventDefault(); setDialog({ kind: 'add' }) }
+      const i = Number(e.key) - 1
+      if (i >= 0 && s.accounts[i]) { e.preventDefault(); call('account:select', { id: s.accounts[i].id }); setPage('browse') }
+    }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [s])
+
+  if (!s || !page) return <div className="ambient"><i /><i /><i /></div>
   const active = s.accounts.find((a) => a.id === s.activeAccountId)
+  const nav = (p: Page, icon: React.ReactNode) => (
+    <button className={'nav-item' + (page === p ? ' active' : '')} onClick={() => setPage(p)}>{icon}{TITLES[p]}</button>
+  )
 
   return (
-    <div className="app">
-      <div className="drag" />
-      <div className="brand"><div className="logo"><Layers size={11} /></div>StackTok</div>
-      <Sidebar s={s} page={page} go={setPage} />
-      <main className="main">
-        <header className="header">
-          <h1>{TITLES[page]}</h1>
-          <span className="sp" />
-          {active && <span className="who"><Avatar a={active} />{active.label}</span>}
-        </header>
-        <div className={'content' + (page === 'browse' ? ' flush' : '')}>
-          {page === 'browse' && <Browse s={s} active={active} />}
-          {page === 'publish' && <Publish s={s} go={setPage} />}
-          {page === 'scheduled' && <Tasks s={s} mode="upcoming" />}
-          {page === 'activity' && <Tasks s={s} mode="activity" />}
-          {page === 'settings' && <SettingsPage s={s} />}
-        </div>
-      </main>
-      <div className="toasts">{toasts.map((t) => <div key={t.id} className={'toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
-    </div>
+    <>
+      <div className="ambient"><i /><i /><i /></div>
+      <div className="shell">
+        <aside className="glass sidebar">
+          <div className="brand"><div className="logo"><Layers size={15} /></div>StackTok</div>
+          <div className="nav">
+            {nav('accounts', <Users size={17} />)}
+            {nav('browse', <Globe size={17} />)}
+          </div>
+          <div className="section-title">
+            Быстрое переключение
+            <button className="btn ghost round" style={{ width: 24, height: 24 }} title="Новый аккаунт (Ctrl+N)" aria-label="Добавить аккаунт" onClick={() => setDialog({ kind: 'add' })}><Plus size={15} /></button>
+          </div>
+          <div className="quick">
+            {s.accounts.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>Пока пусто</div>}
+            {s.accounts.map((a, i) => (
+              <div key={a.id} className={'qrow' + (a.id === s.activeAccountId ? ' active' : '')} onClick={() => { call('account:select', { id: a.id }); setPage('browse') }}>
+                <Avatar a={a} size={28} />
+                <span className="name">{a.label}</span>
+                <span className={'dot ' + (a.session === 'logged_in' ? 'ok' : 'warn')} />
+                {i < 9 && <span className="kbd">{i + 1}</span>}
+              </div>
+            ))}
+          </div>
+          {nav('settings', <Cog size={17} />)}
+        </aside>
+
+        <main className="main">
+          <header className="glass header">
+            <h1>{TITLES[page]}</h1>
+            <span className="sp" />
+            {active && (
+              <div className="chip-acct"><Avatar a={active} size={26} /><span>{active.label}</span><span className={'dot ' + (active.session === 'logged_in' ? 'ok' : 'warn')} /></div>
+            )}
+          </header>
+          <div className={'content' + (page === 'browse' ? ' frame-wrap' : '')}>
+            {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={setDialog} />}
+            {page === 'browse' && <Browse active={active} go={setPage} openDialog={setDialog} />}
+            {page === 'settings' && <SettingsPage s={s} />}
+          </div>
+        </main>
+      </div>
+      {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} />}
+      <div className="toasts">{toasts.map((t) => <div key={t.id} className={'glass toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
+    </>
   )
 }
