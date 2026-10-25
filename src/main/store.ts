@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path'
 import { ACCENTS, BACKGROUNDS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true }
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true, muteByDefault: true }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -30,7 +30,8 @@ export function sanitize(raw: any): Data {
       accent: pick(s.accent, ACCENTS, DEFAULT_SETTINGS.accent),
       background: pick(s.background, BACKGROUNDS, DEFAULT_SETTINGS.background),
       glass: Math.min(100, Math.max(0, num(s.glass) ?? DEFAULT_SETTINGS.glass)),
-      restoreLast: s.restoreLast !== false
+      restoreLast: s.restoreLast !== false,
+      muteByDefault: s.muteByDefault !== false
     },
     activeAccountId: accounts.some((a: any) => a.id === r.activeAccountId) ? r.activeAccountId : undefined
   }

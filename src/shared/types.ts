@@ -12,7 +12,7 @@ export type AccountView = Account & { session: SessionState }
 
 export const THEMES = ['dark', 'light', 'system'] as const
 export const ACCENTS = ['blue', 'violet', 'pink', 'orange', 'green'] as const
-export const BACKGROUNDS = ['aurora', 'sunset', 'ocean', 'graphite'] as const
+export const BACKGROUNDS = ['clear', 'aurora', 'sunset', 'ocean', 'graphite'] as const
 
 export interface Settings {
   theme: (typeof THEMES)[number]
@@ -20,6 +20,7 @@ export interface Settings {
   background: (typeof BACKGROUNDS)[number]
   glass: number // 0..100, how strong the frosted blur is
   restoreLast: boolean // reopen the last active account on launch
+  muteByDefault: boolean // start every account's page silent
 }
 
 export interface Data {

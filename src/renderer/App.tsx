@@ -23,7 +23,7 @@ function useAppearance(s: AppState | null) {
       root.dataset.accent = set.accent
       root.dataset.bg = set.background
       root.style.setProperty('--blur', 10 + set.glass * 0.4 + 'px')
-      root.style.setProperty('--fill', String((light ? 0.22 + set.glass * 0.004 : 0.035 + set.glass * 0.0012).toFixed(3)))
+      root.style.setProperty('--fill', String((set.background === 'clear' ? (light ? 0.3 : 0.2) + set.glass * 0.003 : light ? 0.22 + set.glass * 0.004 : 0.035 + set.glass * 0.0012).toFixed(3)))
     }
     apply()
     mq.addEventListener('change', apply)

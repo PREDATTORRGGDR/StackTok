@@ -63,6 +63,14 @@ function applyOverlay() {
   if (win && !win.isDestroyed()) win.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#c9cbd6' : '#2a2d3a', height: 44 })
 }
 
+// "Чистое" background: a see-through window (Windows 11 acrylic) so the glass shows the real desktop behind it.
+function applyBackground() {
+  if (!win || win.isDestroyed()) return
+  const clear = store.data.settings.background === 'clear'
+  win.setBackgroundMaterial(clear ? 'acrylic' : 'none')
+  win.setBackgroundColor(clear ? '#00000000' : '#0a0c16')
+}
+
 function select(id: string | undefined) {
   store.data.activeAccountId = id
   browse.show(id)
@@ -124,6 +132,8 @@ const handlers: Record<string, Handler> = {
     browse.nav(a)
   },
   'browse:external': () => browse.openExternal(),
+  'browse:muted': () => browse.isMuted(),
+  'browse:toggleMute': () => browse.toggleMute(),
 
   'settings:set': (s: Partial<Settings>) => {
     const cur = store.data.settings
@@ -132,7 +142,9 @@ const handlers: Record<string, Handler> = {
     if (BACKGROUNDS.includes(s?.background as any)) cur.background = s.background!
     if (typeof s?.glass === 'number' && Number.isFinite(s.glass)) cur.glass = Math.min(100, Math.max(0, Math.round(s.glass)))
     if (typeof s?.restoreLast === 'boolean') cur.restoreLast = s.restoreLast
+    if (typeof s?.muteByDefault === 'boolean') cur.muteByDefault = s.muteByDefault
     applyOverlay()
+    applyBackground()
     store.save(); push()
   },
   'data:open': () => shell.openPath(app.getPath('userData'))
@@ -151,7 +163,7 @@ function registerIpc() {
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 980, minHeight: 620,
-    backgroundColor: '#07080d', title: 'StackTok', icon: join(__dirname, '../../build/icon.png'),
+    backgroundColor: store.data.settings.background === 'clear' ? '#00000000' : '#0a0c16', title: 'StackTok', icon: join(__dirname, '../../build/icon.png'),
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#00000000', symbolColor: '#c9cbd6', height: 44 },
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
@@ -167,8 +179,8 @@ function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   win.on('closed', () => app.quit())
-  browse = new Browse(win)
-  wc.once('did-finish-load', () => { browse.show(store.data.activeAccountId); applyOverlay() })
+  browse = new Browse(win, () => store.data.settings.muteByDefault)
+  wc.once('did-finish-load', () => { browse.show(store.data.activeAccountId); applyOverlay(); applyBackground() })
   nativeTheme.on('updated', applyOverlay)
 }
 

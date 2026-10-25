@@ -37,7 +37,9 @@ export class Browse {
   private current?: string
   private bounds: Bounds | null = null
 
-  constructor(private win: BrowserWindow) {}
+  private userMuted = new Map<string, boolean>() // what the user chose per account
+
+  constructor(private win: BrowserWindow, private muteByDefault: () => boolean) {}
 
   private view(accountId: string): WebContentsView {
     let v = this.views.get(accountId)
@@ -48,10 +50,13 @@ export class Browse {
           partition: partitionFor(accountId),
           contextIsolation: true,
           nodeIntegration: false,
-          sandbox: true
+          sandbox: true,
+          autoplayPolicy: 'document-user-activation-required' // no video starts until the user clicks
         }
       })
       lockDown(v.webContents)
+      this.userMuted.set(accountId, this.muteByDefault())
+      v.webContents.setAudioMuted(true) // silent until the view is actually on screen
       v.setBorderRadius(18) // matches the glass frame around it
       v.webContents.loadURL(HOME_URL).catch(() => {})
       this.views.set(accountId, v)
@@ -72,7 +77,11 @@ export class Browse {
 
   private detach(id: string) {
     const v = this.views.get(id)
-    if (v) this.win.contentView.removeChildView(v)
+    if (!v) return
+    this.win.contentView.removeChildView(v)
+    // A hidden view must never keep playing: silence it and pause any video.
+    v.webContents.setAudioMuted(true)
+    v.webContents.executeJavaScript("document.querySelectorAll('video, audio').forEach((m) => m.pause())").catch(() => {})
   }
 
   private layout() {
@@ -81,6 +90,19 @@ export class Browse {
     const v = this.view(this.current)
     this.win.contentView.addChildView(v) // re-adding brings it to front, no-op if already attached
     v.setBounds(this.bounds)
+    v.webContents.setAudioMuted(this.userMuted.get(this.current) ?? true)
+  }
+
+  isMuted(): boolean {
+    return this.current ? (this.userMuted.get(this.current) ?? true) : true
+  }
+
+  toggleMute(): boolean {
+    if (!this.current) return true
+    const next = !this.isMuted()
+    this.userMuted.set(this.current, next)
+    this.views.get(this.current)?.webContents.setAudioMuted(next)
+    return next
   }
 
   nav(action: 'back' | 'forward' | 'reload' | 'home') {
