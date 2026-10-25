@@ -2,7 +2,7 @@ import { BrowserWindow, WebContentsView, app, session, shell } from 'electron'
 import { Bounds, SessionState } from '../shared/types'
 
 // Dev builds can point at a mock site for tests; packaged builds always use TikTok.
-export const HOME_URL = (!app.isPackaged && process.env.STACKTOK_HOME_URL) || 'https://www.tiktok.com/'
+export const HOME_URL = (!app.isPackaged && process.env.STACKTOK_HOME_URL) || 'https://www.tiktok.com/tiktokstudio/upload?from=webapp'
 export const partitionFor = (accountId: string) => `persist:acct-${accountId}`
 
 const isHttp = (url: string) => /^https?:\/\//i.test(url)
