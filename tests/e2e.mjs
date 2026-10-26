@@ -16,13 +16,35 @@ const PORT = 9333
 
 // ---------- mock site: hands each fresh browser profile its own login cookie ----------
 let counter = 0
+// reposts mock: ids currently in the account's Reposts tab; 'trap' is listed but NOT reposted, so clicking it would ADD a repost
+const reposts = ['r1', 'r2', 'r3', 'r4', 'r5', 'trap']
+const reposted = new Set(['r1', 'r2', 'r3', 'r4', 'r5'])
+let repostAddCalls = 0
 const seenHome = []
 const server = http.createServer((req, res) => {
   const cookie = /sessionid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
+  const u = new URL(req.url, 'http://x')
+  if (u.pathname === '/__list') return res.end(JSON.stringify(reposts))
+  if (u.pathname === '/__unrepost') { const v = u.searchParams.get('id'); reposted.delete(v); const i = reposts.indexOf(v); if (i >= 0) reposts.splice(i, 1); return res.end('ok') }
+  if (u.pathname === '/__repost') { repostAddCalls++; return res.end('ok') }
+  const vid = /^\/@[^/]+\/video\/(\w+)$/.exec(u.pathname)
+  if (vid) {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end('<!doctype html><body><div data-e2e="share-icon">share</div><button id="b" data-e2e="repost-icon"></button><script>' +
+      'const id=' + JSON.stringify(vid[1]) + ';let on=' + JSON.stringify(reposted.has(vid[1])) + ';const b=document.getElementById("b");' +
+      'const draw=()=>b.setAttribute("aria-label",on?"Удалить репост":"Репост");draw();' +
+      'b.onclick=async()=>{await fetch(on?"/__unrepost?id="+id:"/__repost?id="+id);on=!on;draw()}</script>')
+  }
+  if (/^\/@[^/]+$/.test(u.pathname)) {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    return res.end('<!doctype html><body><p role="tab" data-e2e="videos-tab">Видео</p><p role="tab" data-e2e="repost-tab">Репосты</p><div id="g"></div><script>' +
+      'document.querySelector("[data-e2e=repost-tab]").onclick=async()=>{const ids=await (await fetch("/__list")).json();' +
+      'document.getElementById("g").innerHTML=ids.map(i=>\'<div data-e2e="user-post-item"><a href="/@other/video/\'+i+\'">\'+i+"</a></div>").join("")}</script>')
+  }
   let id = cookie
   if (!id) { id = 's' + ++counter; res.setHeader('set-cookie', `sessionid=${id}; Max-Age=86400; Path=/`) }
   seenHome.push({ had: cookie, id })
-  res.setHeader('content-type', 'text/html')
+  res.setHeader('content-type', 'text/html; charset=utf-8')
   res.end(`<!doctype html><body style="font-family:sans-serif;background:#1b1d2a;color:#fff"><div data-e2e="nav-profile"><a href="/@user_${id}">me</a></div><h1>Mock TikTok</h1>`)
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
@@ -39,7 +61,7 @@ async function until(fn, ms = 20000, what = 'condition') {
 }
 async function launch() {
   proc = spawn(electron, ['.', `--remote-debugging-port=${PORT}`], {
-    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/' }, stdio: 'ignore'
+    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_FAST: '1' }, stdio: 'ignore'
   })
   const target = await until(async () => {
     const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
@@ -140,6 +162,19 @@ try {
   check(s.accounts.find((a) => a.id === C).label === 'Мемы 2' && s.settings.background === 'ocean' && s.settings.restoreLast, '4b renames and settings survive restart')
   await until(async () => (await state()).accounts.find((a) => a.id === A).session === 'logged_in', 10000, 'session after restart')
   check(true, '4c login session survives restart')
+
+  // repost cleanup: removes only real reposts, never adds one, reports what it could not remove
+  await api('reposts:start', { id: A })
+  const j1 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 60000, 'repost job')
+  check(j1.removed === 5 && reposts.length === 1 && reposts[0] === 'trap', '9a all real reposts are removed', JSON.stringify({ j1, reposts }))
+  check(repostAddCalls === 0, '9b a video that is not reposted is never clicked (cannot add reposts)', String(repostAddCalls))
+  check(j1.status === 'stopped' && /Не удалось убрать: 1/.test(j1.message), '9c an item TikTok keeps in the list is reported, not looped forever', j1.message)
+  await api('reposts:dismiss')
+  reposts.length = 0
+  await api('reposts:start', { id: A })
+  const j2 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 30000, 'empty repost job')
+  check(j2.status === 'done' && j2.removed === 0, '9d empty reposts tab finishes as done', JSON.stringify(j2))
+  await api('reposts:dismiss')
 
   // removal keeps the profile unless a wipe is requested
   await api('account:remove', { id: B, wipe: false })

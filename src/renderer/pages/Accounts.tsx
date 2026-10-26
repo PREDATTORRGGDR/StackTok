@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bug, Eraser, LogIn, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, Users, ArrowRight } from 'lucide-react'
+import { Bug, Eraser, Repeat2, LogIn, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, Users, ArrowRight } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call } from '../api'
 import { Dialog } from '../Dialogs'
@@ -47,6 +47,7 @@ function Card({ a, i, active, go, openDialog }: { a: AccountView; i: number; act
       </div>
       <div className="actions">
         <button className="btn primary" onClick={open}>{signedIn ? 'Открыть' : 'Войти'}<ArrowRight size={15} /></button>
+        <button className="btn" disabled={!signedIn || !a.verified || !a.username} title={a.verified && a.username ? 'Удалить все репосты этого аккаунта' : 'Сначала подтвердите аккаунт во вкладке «Обзор»'} onClick={() => openDialog({ kind: 'reposts', acct: a })}><Repeat2 size={15} />Репосты</button>
       </div>
     </div>
   )

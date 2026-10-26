@@ -4,6 +4,7 @@ import { AccountView, Settings } from '@shared/types'
 export interface AppState {
   accounts: AccountView[]
   settings: Settings
+  job: { accountId: string; status: 'running' | 'paused' | 'done' | 'stopped'; removed: number; message: string } | null
   activeAccountId?: string
   version: string
   dataPath: string

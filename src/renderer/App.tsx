@@ -31,6 +31,27 @@ function useAppearance(s: AppState | null) {
   }, [set?.theme, set?.accent, set?.background, set?.glass])
 }
 
+function JobCard({ s }: { s: AppState }) {
+  const j = s.job!
+  const acct = s.accounts.find((a) => a.id === j.accountId)
+  const live = j.status === 'running' || j.status === 'paused'
+  return (
+    <div className="glass jobcard">
+      <div className="row">
+        {j.status === 'running' && <span className="spinner" />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600 }}>Репосты · {acct?.label ?? 'аккаунт'}</div>
+          <div className="muted small">{j.message}</div>
+        </div>
+      </div>
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {j.status === 'paused' && <button className="btn primary sm" onClick={() => call('reposts:resume')}>Продолжить</button>}
+        {live ? <button className="btn sm" onClick={() => call('reposts:stop')}>Остановить</button> : <button className="btn sm" onClick={() => call('reposts:dismiss')}>Закрыть</button>}
+      </div>
+    </div>
+  )
+}
+
 export function App() {
   const s = useAppState()
   const [page, setPage] = useState<Page | null>(null)
@@ -101,6 +122,7 @@ export function App() {
           </div>
         </main>
       </div>
+      {s.job && <JobCard s={s} />}
       {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} />}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={'glass toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
     </>
