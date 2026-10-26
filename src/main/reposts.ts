@@ -32,15 +32,21 @@ const findRepost = () => {
   document.querySelectorAll('[data-stacktok-target]').forEach((e) => e.removeAttribute('data-stacktok-target'))
   const el = document.querySelector('[data-e2e="share-repost"]') as HTMLElement | null
   if (!el) return 'none'
-  const label = (el.innerText || el.getAttribute('aria-label') || '').trim()
-  if (/удалить|убрать|отменить|remove|undo/i.test(label)) { el.setAttribute('data-stacktok-target', '1'); return 'on' }
+  // Inline layout: the icon has no text (its "Удалить репост" is a hover tooltip), but the page says "Вы сделали репост".
+  const label = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim()
+  const mine = /вы сделали репост|you reposted/i.test(document.querySelector('[data-e2e="repost-tag"]')?.textContent || '')
+  const on = /удалить|убрать|отменить|remove|undo/i.test(label) || (!/^(репост|repost)$/i.test(label) && mine)
+  if (on) { el.setAttribute('data-stacktok-target', '1'); return 'on' }
   return 'off'
 }
 
 const clickTarget = () => {
   const t = document.querySelector('[data-stacktok-target]') as HTMLElement | null
   if (!t) return false
-  t.click()
+  // Click the innermost element under the control's centre: the handler may sit on a child, not on the wrapper.
+  const r = t.getBoundingClientRect()
+  const inner = (document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) as HTMLElement | null) || t
+  ;(t.contains(inner) ? inner : t).click()
   return true
 }
 
@@ -175,7 +181,7 @@ export class RepostCleaner {
     if ((await sessionState(this.job.accountId)) !== 'logged_in') return this.set({ status: 'stopped', message: 'Аккаунт не авторизован. Войдите на вкладке «Обзор».' })
     const win = (this.win = new BrowserWindow({
       width: 1100, height: 800, show: false, title: 'StackTok: репосты',
-      webPreferences: { partition: partitionFor(this.job.accountId), contextIsolation: true, nodeIntegration: false, sandbox: true }
+      webPreferences: { partition: partitionFor(this.job.accountId), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } // a hidden window must still render TikTok's UI
     }))
     lockDown(win.webContents)
     const wc = win.webContents
@@ -224,8 +230,10 @@ export class RepostCleaner {
 
         // The repost control may sit inside the share menu, so look directly first and open the menu only if needed.
         const locate = async () => {
-          let st = await js<string>(findRepost)
-          if (st === 'none' && (await js<boolean>(clickShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
+          // The video view renders late and in two layouts: repost icon inline, or inside the share dialog.
+          const seek = async (ms: number) => (await until(async () => ((await js<string>(findRepost)) !== 'none' ? true : undefined), ms)) ? js<string>(findRepost) : 'none'
+          let st = await seek(7_000)
+          if (st === 'none' && (await js<boolean>(clickShare))) st = await seek(5_000)
           return st
         }
         let state = await locate()
@@ -237,9 +245,16 @@ export class RepostCleaner {
         if (state === 'on' && (await js<boolean>(clickTarget))) {
           await sleep(this.fast ? 80 : 900)
           await js<boolean>(confirmDialog)
-          await sleep(this.fast ? 80 : 900)
-          this.set({ removed: this.job.removed + 1, message: `Удалено: ${this.job.removed + 1}${this.like ? ` · лайков: ${this.job.liked}` : ''}` })
-          failures = 0
+          // Count it only once the page confirms: the repost control no longer says "reposted".
+          const gone = await until(async () => ((await js<string>(findRepost)) !== 'on' ? true : undefined), 5_000)
+          if (gone) {
+            this.set({ removed: this.job.removed + 1, message: `Удалено: ${this.job.removed + 1}${this.like ? ` · лайков: ${this.job.liked}` : ''}` })
+            failures = 0
+          } else {
+            this.debug ||= JSON.stringify(await js<object>(dumpPage), null, 1).slice(0, 8000)
+            this.set({ hasDebug: true })
+            failures++
+          }
         } else {
           if (!this.debug) {
             this.debug = JSON.stringify(await js<object>(dumpPage), null, 1).slice(0, 8000)
