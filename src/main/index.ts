@@ -1,9 +1,8 @@
-import { BrowserWindow, app, clipboard, ipcMain, nativeTheme, shell } from 'electron'
+import { BrowserWindow, app, ipcMain, nativeTheme, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { ACCENTS, AccountView, BACKGROUNDS, Bounds, SessionState, Settings, THEMES } from '../shared/types'
-import { Browse, HOME_URL, configureSession, sessionState } from './browse'
-import { RepostCleaner } from './reposts'
+import { Browse, configureSession, sessionState } from './browse'
 import { Store } from './store'
 
 const DEV = !app.isPackaged
@@ -14,7 +13,6 @@ if (DEV && process.env.STACKTOK_USER_DATA) app.setPath('userData', process.env.S
 let win: BrowserWindow
 let store: Store
 let browse: Browse
-let cleaner: RepostCleaner | undefined // at most one repost cleanup at a time
 
 // ---------- validation ----------
 const isStr = (v: unknown, max = 500): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -40,7 +38,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, job: cleaner?.job ?? null, settings: d.settings, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -111,7 +109,6 @@ const handlers: Record<string, Handler> = {
   // Removing keeps the stored browser profile unless `wipe` is explicitly set.
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
     const acc = account(a?.id)
-    if (cleaner?.job.accountId === acc.id) cleaner.stop()
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
     store.data.accounts = store.data.accounts.filter((x) => x.id !== acc.id)
@@ -150,23 +147,6 @@ const handlers: Record<string, Handler> = {
     applyBackground()
     store.save(); push()
   },
-  // Removes the account's own reposts through the website. Needs a confirmed username so the right profile is opened.
-  'reposts:start': (a: { id: string; like?: boolean }) => {
-    const acc = account(a?.id)
-    need(!cleaner || cleaner.job.status === 'done' || cleaner.job.status === 'stopped', 'Очистка репостов уже идёт.')
-    need(acc.verified && !!acc.username, 'Сначала подтвердите аккаунт на вкладке «Обзор».')
-    select(acc.id) // the cleanup runs in the Browse view of this account, the page the user sees
-    cleaner = new RepostCleaner(
-      acc.id, acc.username!, new URL(HOME_URL).origin, browse.contents(acc.id), () => browse.isOnScreen(acc.id), push,
-      a.like === true, DEV && !!process.env.STACKTOK_FAST, DEV && Number(process.env.STACKTOK_MAX_REPOSTS) || undefined
-    )
-    void cleaner.run()
-    push()
-  },
-  'reposts:stop': () => { cleaner?.stop(); if (cleaner && cleaner.job.status !== 'done') { cleaner.job.status = 'stopped'; cleaner.job.message = 'Остановлено.' } push() },
-  'reposts:copyDebug': () => { if (cleaner?.debug) clipboard.writeText(cleaner.debug); return !!cleaner?.debug },
-  'reposts:resume': () => cleaner?.resume(),
-  'reposts:dismiss': () => { if (cleaner && cleaner.job.status !== 'running' && cleaner.job.status !== 'paused') cleaner = undefined; push() },
   'data:open': () => shell.openPath(app.getPath('userData'))
 }
 

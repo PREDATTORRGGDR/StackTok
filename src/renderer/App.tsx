@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Globe, Layers, Plus, Settings as Cog, Users } from 'lucide-react'
-import { AppState, call, toast, useAppState, useToasts } from './api'
+import { AppState, call, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
 import { Accounts } from './pages/Accounts'
 import { Browse } from './pages/Browse'
@@ -29,28 +29,6 @@ function useAppearance(s: AppState | null) {
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
   }, [set?.theme, set?.accent, set?.background, set?.glass])
-}
-
-function JobCard({ s }: { s: AppState }) {
-  const j = s.job!
-  const acct = s.accounts.find((a) => a.id === j.accountId)
-  const live = j.status === 'running' || j.status === 'paused'
-  return (
-    <div className="glass jobcard">
-      <div className="row">
-        {j.status === 'running' && <span className="spinner" />}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>Репосты · {acct?.label ?? 'аккаунт'}</div>
-          <div className="muted small">{j.message}</div>
-        </div>
-      </div>
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        {j.hasDebug && <button className="btn ghost sm" onClick={async () => { if (await call('reposts:copyDebug')) toast('Диагностика скопирована') }}>Скопировать диагностику</button>}
-        {j.status === 'paused' && <button className="btn primary sm" onClick={() => call('reposts:resume')}>Продолжить</button>}
-        {live ? <button className="btn sm" onClick={() => call('reposts:stop')}>Остановить</button> : <button className="btn sm" onClick={() => call('reposts:dismiss')}>Закрыть</button>}
-      </div>
-    </div>
-  )
 }
 
 export function App() {
@@ -123,7 +101,6 @@ export function App() {
           </div>
         </main>
       </div>
-      {s.job && <JobCard s={s} />}
       {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} />}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={'glass toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
     </>

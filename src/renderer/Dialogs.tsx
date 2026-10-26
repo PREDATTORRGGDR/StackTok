@@ -3,18 +3,16 @@ import { AccountView } from '@shared/types'
 import { call } from './api'
 import { Modal } from './ui'
 
-export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'reposts'; acct: AccountView }
+export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe'; acct: AccountView }
 
 export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () => void; onAdded: () => void }) {
   const [text, setText] = useState(dialog.kind === 'rename' ? dialog.acct.label : '')
   const [wipe, setWipe] = useState(false)
-  const [like, setLike] = useState(true)
   const typing = dialog.kind === 'add' || dialog.kind === 'rename'
 
   async function submit() {
     if (dialog.kind === 'add') { if (await call('account:add', { label: text })) { onAdded(); close() } return }
     if (dialog.kind === 'rename') await call('account:rename', { id: dialog.acct.id, label: text })
-    else if (dialog.kind === 'reposts') { if (await call('reposts:start', { id: dialog.acct.id, like }) !== undefined) onAdded(); else return }
     else if (dialog.kind === 'remove') await call('account:remove', { id: dialog.acct.id, wipe })
     else await call('account:wipe', { id: dialog.acct.id })
     close()
@@ -42,17 +40,10 @@ export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () 
           <span className="muted small">«{dialog.acct.label}» будет разлогинен, cookies, хранилище и кэш очистятся. Сам аккаунт останется в списке.</span>
         </>
       )}
-      {dialog.kind === 'reposts' && (
-        <>
-          <h3>Удалить все репосты?</h3>
-          <span className="muted small">У аккаунта «{dialog.acct.label}» (@{dialog.acct.username}) будут по одному убраны все репосты прямо на странице «Обзор». Не пользуйтесь страницей, пока идёт очистка: это займёт несколько секунд на каждый репост. Собственные видео не затрагиваются. Вернуть репосты автоматически нельзя.</span>
-          <label className="row small" style={{ cursor: 'pointer' }}><input type="checkbox" checked={like} onChange={(e) => setLike(e.target.checked)} /> Сначала поставить лайк на видео (если лайк уже есть — снять и поставить заново)</label>
-        </>
-      )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
         <button className="btn" onClick={close}>Отмена</button>
-        <button className={'btn primary' + (dialog.kind === 'reposts' ? ' danger-fill' : '')} disabled={typing && !text.trim()} onClick={submit}>
-          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : dialog.kind === 'reposts' ? 'Удалить репосты' : wipe ? 'Убрать и стереть' : 'Убрать'}
+        <button className="btn primary" disabled={typing && !text.trim()} onClick={submit}>
+          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : wipe ? 'Убрать и стереть' : 'Убрать'}
         </button>
       </div>
     </Modal>

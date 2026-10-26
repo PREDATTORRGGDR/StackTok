@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContents, WebContentsView, app, session, shell } from 'electron'
+import { BrowserWindow, WebContentsView, app, session, shell } from 'electron'
 import { Bounds, SessionState } from '../shared/types'
 
 // Dev builds can point at a mock site for tests; packaged builds always use TikTok.
@@ -51,8 +51,7 @@ export class Browse {
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
-          autoplayPolicy: 'document-user-activation-required', // no video starts until the user clicks
-          backgroundThrottling: false // a cleanup running in this view must keep working if the user looks elsewhere
+          autoplayPolicy: 'document-user-activation-required' // no video starts until the user clicks
         }
       })
       lockDown(v.webContents)
@@ -92,16 +91,6 @@ export class Browse {
     this.win.contentView.addChildView(v) // re-adding brings it to front, no-op if already attached
     v.setBounds(this.bounds)
     v.webContents.setAudioMuted(this.userMuted.get(this.current) ?? true)
-  }
-
-  /** The account's Browse view (created on demand). */
-  contents(accountId: string): WebContents {
-    return this.view(accountId).webContents
-  }
-
-  /** True while this account's view is attached and has a real size, i.e. the page lays out like it does for the user. */
-  isOnScreen(accountId: string): boolean {
-    return this.current === accountId && !!this.bounds && this.bounds.width > 300 && this.bounds.height > 300
   }
 
   isMuted(): boolean {
