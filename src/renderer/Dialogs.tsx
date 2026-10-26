@@ -8,12 +8,13 @@ export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'r
 export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () => void; onAdded: () => void }) {
   const [text, setText] = useState(dialog.kind === 'rename' ? dialog.acct.label : '')
   const [wipe, setWipe] = useState(false)
+  const [like, setLike] = useState(true)
   const typing = dialog.kind === 'add' || dialog.kind === 'rename'
 
   async function submit() {
     if (dialog.kind === 'add') { if (await call('account:add', { label: text })) { onAdded(); close() } return }
     if (dialog.kind === 'rename') await call('account:rename', { id: dialog.acct.id, label: text })
-    else if (dialog.kind === 'reposts') await call('reposts:start', { id: dialog.acct.id })
+    else if (dialog.kind === 'reposts') await call('reposts:start', { id: dialog.acct.id, like })
     else if (dialog.kind === 'remove') await call('account:remove', { id: dialog.acct.id, wipe })
     else await call('account:wipe', { id: dialog.acct.id })
     close()
@@ -45,6 +46,7 @@ export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () 
         <>
           <h3>Удалить все репосты?</h3>
           <span className="muted small">У аккаунта «{dialog.acct.label}» (@{dialog.acct.username}) будут по одному убраны все репосты через сайт TikTok. Это займёт несколько секунд на каждый репост. Собственные видео не затрагиваются. Вернуть репосты автоматически нельзя.</span>
+          <label className="row small" style={{ cursor: 'pointer' }}><input type="checkbox" checked={like} onChange={(e) => setLike(e.target.checked)} /> Сначала поставить лайк на видео (если лайк уже есть — снять и поставить заново)</label>
         </>
       )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>

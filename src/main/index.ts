@@ -151,11 +151,11 @@ const handlers: Record<string, Handler> = {
     store.save(); push()
   },
   // Removes the account's own reposts through the website. Needs a confirmed username so the right profile is opened.
-  'reposts:start': (a: { id: string }) => {
+  'reposts:start': (a: { id: string; like?: boolean }) => {
     const acc = account(a?.id)
     need(!cleaner || cleaner.job.status === 'done' || cleaner.job.status === 'stopped', 'Очистка репостов уже идёт.')
     need(acc.verified && !!acc.username, 'Сначала подтвердите аккаунт на вкладке «Обзор».')
-    cleaner = new RepostCleaner(acc.id, acc.username!, new URL(HOME_URL).origin, push, DEV && !!process.env.STACKTOK_FAST)
+    cleaner = new RepostCleaner(acc.id, acc.username!, new URL(HOME_URL).origin, push, a.like === true, DEV && !!process.env.STACKTOK_FAST)
     void cleaner.run()
     push()
   },

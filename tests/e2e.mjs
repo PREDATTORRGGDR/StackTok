@@ -20,19 +20,24 @@ let counter = 0
 const reposts = ['r1', 'r2', 'r3', 'r4', 'r5', 'trap']
 const reposted = new Set(['r1', 'r2', 'r3', 'r4', 'r5'])
 let repostAddCalls = 0
+const liked = new Set(['r2', 'r4']) // already liked: must be unliked and liked again
+const likeLog = []
 const seenHome = []
 const server = http.createServer((req, res) => {
   const cookie = /sessionid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
   const u = new URL(req.url, 'http://x')
   if (u.pathname === '/__list') return res.end(JSON.stringify(reposts))
   if (u.pathname === '/__unrepost') { const v = u.searchParams.get('id'); reposted.delete(v); const i = reposts.indexOf(v); if (i >= 0) reposts.splice(i, 1); return res.end('ok') }
+  if (u.pathname === '/__like') { const v = u.searchParams.get('id'); const on = !liked.has(v); on ? liked.add(v) : liked.delete(v); likeLog.push(v + ':' + (on ? 'like' : 'unlike')); return res.end('ok') }
   if (u.pathname === '/__repost') { repostAddCalls++; return res.end('ok') }
   const vid = /^\/@[^/]+\/video\/(\w+)$/.exec(u.pathname)
   if (vid) {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    return res.end('<!doctype html><body><div data-e2e="share-icon">share</div><button id="b" data-e2e="repost-icon"></button><script>' +
+    return res.end('<!doctype html><body><div data-e2e="share-icon">share</div><button id="b" data-e2e="repost-icon"></button><button id="l" data-e2e="like-icon"></button><script>' +
       'const id=' + JSON.stringify(vid[1]) + ';let on=' + JSON.stringify(reposted.has(vid[1])) + ';const b=document.getElementById("b");' +
       'const draw=()=>b.setAttribute("aria-label",on?"Удалить репост":"Репост");draw();' +
+      'const l=document.getElementById("l");let lk=' + JSON.stringify(liked.has(vid[1])) + ';const dl=()=>l.setAttribute("aria-pressed",String(lk));dl();' +
+      'l.onclick=async()=>{await fetch("/__like?id="+id);lk=!lk;dl()};' +
       'b.onclick=async()=>{await fetch(on?"/__unrepost?id="+id:"/__repost?id="+id);on=!on;draw()}</script>')
   }
   if (/^\/@[^/]+$/.test(u.pathname)) {
@@ -164,11 +169,14 @@ try {
   check(true, '4c login session survives restart')
 
   // repost cleanup: removes only real reposts, never adds one, reports what it could not remove
-  await api('reposts:start', { id: A })
+  await api('reposts:start', { id: A, like: true })
   const j1 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 60000, 'repost job')
   check(j1.removed === 5 && reposts.length === 1 && reposts[0] === 'trap', '9a all real reposts are removed', JSON.stringify({ j1, reposts }))
   check(repostAddCalls === 0, '9b a video that is not reposted is never clicked (cannot add reposts)', String(repostAddCalls))
   check(j1.status === 'stopped' && /Не удалось убрать: 1/.test(j1.message), '9c an item TikTok keeps in the list is reported, not looped forever', j1.message)
+  check(['r1', 'r2', 'r3', 'r4', 'r5'].every((i) => liked.has(i)) && j1.liked === 5, '9e every removed repost ends up liked', JSON.stringify({ liked: [...liked], n: j1.liked }))
+  check(likeLog.join() === 'r1:like,r2:unlike,r2:like,r3:like,r4:unlike,r4:like,r5:like', '9f an existing like is toggled off and on again, an absent like is added once', likeLog.join())
+  check(!likeLog.some((x) => x.startsWith('trap')), '9g likes are only touched on videos being processed')
   await api('reposts:dismiss')
   reposts.length = 0
   await api('reposts:start', { id: A })

@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import { configureSession, lockDown, partitionFor, sessionState } from './browse'
 
 export type JobStatus = 'running' | 'paused' | 'done' | 'stopped'
-export interface Job { accountId: string; status: JobStatus; removed: number; message: string }
+export interface Job { accountId: string; status: JobStatus; removed: number; liked: number; message: string }
 
 // ───────── code that runs inside the TikTok page ─────────
 // These are real functions serialised with toString(), so they must not use anything from the outer scope.
@@ -64,6 +64,28 @@ const confirmDialog = () => {
   return false
 }
 
+/** Reads the like button state without changing anything. */
+const likeState = () => {
+  const e = document.querySelector('[data-e2e="like-icon"]')
+  const b = e && (e.closest('button, [role="button"]') || e)
+  if (!b) return 'none'
+  const p = b.getAttribute('aria-pressed')
+  if (p === 'true') return 'liked'
+  if (p === 'false') return 'unliked'
+  const l = (b.getAttribute('aria-label') || '').toLowerCase()
+  if (/снять|убрать|unlike|remove like|liked/.test(l)) return 'liked'
+  if (/поставить|нравится|^like/.test(l)) return 'unliked'
+  return 'unknown'
+}
+
+const clickLike = () => {
+  const e = document.querySelector('[data-e2e="like-icon"]')
+  const b = (e && (e.closest('button, [role="button"]') || e)) as HTMLElement | null
+  if (!b) return false
+  b.click()
+  return true
+}
+
 const videoReady = () => !!document.querySelector('[data-e2e="share-icon"], video')
 
 // ───────── the job ─────────
@@ -85,9 +107,10 @@ export class RepostCleaner {
     private username: string,
     private base: string,
     private onChange: () => void,
+    private like = false, // put a like on each video before removing its repost
     private fast = false
   ) {
-    this.job = { accountId, status: 'running', removed: 0, message: 'Запуск…' }
+    this.job = { accountId, status: 'running', removed: 0, liked: 0, message: 'Запуск…' }
   }
 
   private set(patch: Partial<Job>) {
@@ -111,6 +134,26 @@ export class RepostCleaner {
     this.set({ status: 'paused', message })
     await new Promise<void>((r) => (this.gate = r))
     this.gate = undefined
+  }
+
+  /**
+   * Makes sure the video ends up liked. Already liked: unlike and like again (a fresh like).
+   * If the state of the button cannot be read, nothing is clicked: guessing could remove an existing like.
+   */
+  private async ensureLiked(js: <T>(fn: Function, arg?: unknown) => Promise<T>): Promise<boolean> {
+    const wait = () => sleep(this.fast ? 80 : 900)
+    const state = () => js<string>(likeState)
+    let s = await state()
+    if (s === 'liked') {
+      await js<boolean>(clickLike); await wait()
+      s = await state()
+      if (s !== 'unliked') return false // unlike did not register; leave the existing like alone
+    }
+    if (s === 'unliked') {
+      await js<boolean>(clickLike); await wait()
+      return (await state()) === 'liked'
+    }
+    return false
   }
 
   async run() {
@@ -165,13 +208,23 @@ export class RepostCleaner {
         if (why) { await this.pause(why); if (this.stopped) return; tried.delete(next); i--; continue }
         await until(() => js<boolean>(videoReady), 10_000)
 
-        let state = await js<string>(findRepost)
-        if (state === 'none' && (await js<boolean>(clickShare))) { await sleep(this.fast ? 80 : 900); state = await js<string>(findRepost) }
+        // The repost control may sit inside the share menu, so look directly first and open the menu only if needed.
+        const locate = async () => {
+          let st = await js<string>(findRepost)
+          if (st === 'none' && (await js<boolean>(clickShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
+          return st
+        }
+        let state = await locate()
+        // Only a video that is really reposted gets a like, so stray items in the list are never touched.
+        if (state === 'on' && this.like) {
+          if (await this.ensureLiked(js)) this.set({ liked: this.job.liked + 1 })
+          state = await locate() // the like click may have closed the share menu
+        }
         if (state === 'on' && (await js<boolean>(clickTarget))) {
           await sleep(this.fast ? 80 : 900)
           await js<boolean>(confirmDialog)
           await sleep(this.fast ? 80 : 900)
-          this.set({ removed: this.job.removed + 1, message: `Удалено: ${this.job.removed + 1}` })
+          this.set({ removed: this.job.removed + 1, message: `Удалено: ${this.job.removed + 1}${this.like ? ` · лайков: ${this.job.liked}` : ''}` })
           failures = 0
         } else if (++failures >= 3) {
           await this.pause('Не получается распознать кнопку репоста на странице видео. Страница TikTok изменилась или видео недоступно.')
