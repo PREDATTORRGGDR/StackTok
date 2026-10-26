@@ -176,6 +176,7 @@ try {
   check(j1.status === 'stopped' && /Не удалось убрать: 1/.test(j1.message), '9c an item TikTok keeps in the list is reported, not looped forever', j1.message)
   check(['r1', 'r2', 'r3', 'r4', 'r5'].every((i) => liked.has(i)) && j1.liked === 5, '9e every removed repost ends up liked', JSON.stringify({ liked: [...liked], n: j1.liked }))
   check(likeLog.join() === 'r1:like,r2:unlike,r2:like,r3:like,r4:unlike,r4:like,r5:like', '9f an existing like is toggled off and on again, an absent like is added once', likeLog.join())
+  check(j1.hasDebug && (await api('reposts:copyDebug')) === true, '9h a failed item produces a copyable page diagnostic', JSON.stringify(j1))
   check(!likeLog.some((x) => x.startsWith('trap')), '9g likes are only touched on videos being processed')
   await api('reposts:dismiss')
   reposts.length = 0

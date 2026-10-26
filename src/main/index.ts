@@ -1,4 +1,4 @@
-import { BrowserWindow, app, ipcMain, nativeTheme, shell } from 'electron'
+import { BrowserWindow, app, clipboard, ipcMain, nativeTheme, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { ACCENTS, AccountView, BACKGROUNDS, Bounds, SessionState, Settings, THEMES } from '../shared/types'
@@ -160,6 +160,7 @@ const handlers: Record<string, Handler> = {
     push()
   },
   'reposts:stop': () => { cleaner?.stop(); if (cleaner && cleaner.job.status !== 'done') { cleaner.job.status = 'stopped'; cleaner.job.message = 'Остановлено.' } push() },
+  'reposts:copyDebug': () => { if (cleaner?.debug) clipboard.writeText(cleaner.debug); return !!cleaner?.debug },
   'reposts:resume': () => cleaner?.resume(),
   'reposts:dismiss': () => { if (cleaner && cleaner.job.status !== 'running' && cleaner.job.status !== 'paused') cleaner = undefined; push() },
   'data:open': () => shell.openPath(app.getPath('userData'))

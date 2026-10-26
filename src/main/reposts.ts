@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import { configureSession, lockDown, partitionFor, sessionState } from './browse'
 
 export type JobStatus = 'running' | 'paused' | 'done' | 'stopped'
-export interface Job { accountId: string; status: JobStatus; removed: number; liked: number; message: string }
+export interface Job { accountId: string; status: JobStatus; removed: number; liked: number; message: string; hasDebug: boolean }
 
 // ───────── code that runs inside the TikTok page ─────────
 // These are real functions serialised with toString(), so they must not use anything from the outer scope.
@@ -86,6 +86,34 @@ const clickLike = () => {
   return true
 }
 
+/** TikTok shows the repost option when the share icon is hovered, so imitate the pointer moving over it. */
+const hoverShare = () => {
+  const s = document.querySelector('[data-e2e="share-icon"]') as HTMLElement | null
+  if (!s) return false
+  for (const el of [s, s.parentElement]) {
+    for (const t of ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'mousemove']) {
+      el?.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }))
+    }
+  }
+  return true
+}
+
+/** Structure of the page for troubleshooting (markup names only, no personal content). */
+const dumpPage = () => {
+  const label = (e: Element) => ((e.getAttribute('aria-label') || (e as HTMLElement).innerText || '') as string).trim().slice(0, 60)
+  const like = document.querySelector('[data-e2e="like-icon"]')
+  return {
+    url: location.href,
+    title: document.title,
+    dataE2e: [...new Set([...document.querySelectorAll('[data-e2e]')].map((e) => e.getAttribute('data-e2e')))].slice(0, 80),
+    repostLike: [...document.querySelectorAll('[data-e2e], button, [role="button"], [role="menuitem"], li')]
+      .filter((e) => /репост|repost/i.test(label(e) + ' ' + (e.getAttribute('data-e2e') || '')))
+      .slice(0, 12)
+      .map((e) => e.outerHTML.replace(/\s+/g, ' ').slice(0, 300)),
+    like: like ? like.outerHTML.replace(/\s+/g, ' ').slice(0, 300) : null
+  }
+}
+
 const videoReady = () => !!document.querySelector('[data-e2e="share-icon"], video')
 
 // ───────── the job ─────────
@@ -98,6 +126,7 @@ const call = (fn: Function, arg?: unknown) => `(${fn})(${JSON.stringify(arg)})`
  */
 export class RepostCleaner {
   job: Job
+  debug = '' // page structure captured when a repost could not be handled
   private win?: BrowserWindow
   private stopped = false
   private gate?: () => void
@@ -110,7 +139,7 @@ export class RepostCleaner {
     private like = false, // put a like on each video before removing its repost
     private fast = false
   ) {
-    this.job = { accountId, status: 'running', removed: 0, liked: 0, message: 'Запуск…' }
+    this.job = { accountId, status: 'running', removed: 0, liked: 0, message: 'Запуск…', hasDebug: false }
   }
 
   private set(patch: Partial<Job>) {
@@ -198,7 +227,7 @@ export class RepostCleaner {
 
         const next = links.find((l) => !tried.has(l))
         if (!next) {
-          return this.set({ status: 'stopped', message: `Удалено: ${this.job.removed}. Не удалось убрать: ${links.length} — TikTok оставил их в списке, проверьте вручную.` })
+          return this.set({ status: 'stopped', message: `Удалено: ${this.job.removed}. Не удалось убрать: ${links.length}. Страница видео выглядит не так, как ожидалось — нажмите «Скопировать диагностику».` })
         }
         tried.add(next)
 
@@ -211,6 +240,7 @@ export class RepostCleaner {
         // The repost control may sit inside the share menu, so look directly first and open the menu only if needed.
         const locate = async () => {
           let st = await js<string>(findRepost)
+          if (st === 'none' && (await js<boolean>(hoverShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
           if (st === 'none' && (await js<boolean>(clickShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
           return st
         }
@@ -226,7 +256,14 @@ export class RepostCleaner {
           await sleep(this.fast ? 80 : 900)
           this.set({ removed: this.job.removed + 1, message: `Удалено: ${this.job.removed + 1}${this.like ? ` · лайков: ${this.job.liked}` : ''}` })
           failures = 0
-        } else if (++failures >= 3) {
+        } else {
+          if (!this.debug) {
+            this.debug = JSON.stringify(await js<object>(dumpPage), null, 1).slice(0, 8000)
+            this.set({ hasDebug: true })
+          }
+          failures++
+        }
+        if (failures >= 3) {
           await this.pause('Не получается распознать кнопку репоста на странице видео. Страница TikTok изменилась или видео недоступно.')
           if (this.stopped) return
           failures = 0

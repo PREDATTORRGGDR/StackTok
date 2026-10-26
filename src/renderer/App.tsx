@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Globe, Layers, Plus, Settings as Cog, Users } from 'lucide-react'
-import { AppState, call, useAppState, useToasts } from './api'
+import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
 import { Accounts } from './pages/Accounts'
 import { Browse } from './pages/Browse'
@@ -45,6 +45,7 @@ function JobCard({ s }: { s: AppState }) {
         </div>
       </div>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
+        {j.hasDebug && <button className="btn ghost sm" onClick={async () => { if (await call('reposts:copyDebug')) toast('Диагностика скопирована') }}>Скопировать диагностику</button>}
         {j.status === 'paused' && <button className="btn primary sm" onClick={() => call('reposts:resume')}>Продолжить</button>}
         {live ? <button className="btn sm" onClick={() => call('reposts:stop')}>Остановить</button> : <button className="btn sm" onClick={() => call('reposts:dismiss')}>Закрыть</button>}
       </div>
