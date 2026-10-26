@@ -38,7 +38,7 @@ const server = http.createServer((req, res) => {
       'const l=document.getElementById("l");const dl=()=>l.setAttribute("aria-pressed",String(lk));dl();' +
       'l.onclick=async()=>{await fetch("/__like?id="+id);lk=!lk;dl()};' +
       'document.querySelector("[data-e2e=share-icon]").onclick=()=>{if(document.querySelector("[data-e2e=share-repost]"))return;' +
-      'const m=document.createElement("div");m.setAttribute("role","dialog");m.innerHTML=\'<div data-e2e="share-repost"></div>\';document.body.append(m);' +
+      'const m=document.createElement("div");m.setAttribute("role","dialog");m.innerHTML=\'<div data-e2e="video-share-repost"></div>\';document.body.append(m);' +
       'const r=m.firstChild;const draw=()=>{r.textContent=on?"Удалить репост":"Репост"};draw();' +
       'r.onclick=async()=>{await fetch(on?"/__unrepost?id="+id:"/__repost?id="+id);on=!on;draw()}}</script>')
   }
@@ -171,7 +171,7 @@ try {
   check(true, '4c login session survives restart')
 
   // repost cleanup: removes only real reposts, never adds one, reports what it could not remove
-  await api('reposts:start', { id: A, like: true })
+  await clickNav('Обзор'); await api('reposts:start', { id: A, like: true })
   const j1 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 60000, 'repost job')
   check(j1.removed === 5 && reposts.length === 1 && reposts[0] === 'trap', '9a all real reposts are removed', JSON.stringify({ j1, reposts }))
   check(repostAddCalls === 0, '9b a video that is not reposted is never clicked (cannot add reposts)', String(repostAddCalls))
@@ -182,7 +182,7 @@ try {
   check(!likeLog.some((x) => x.startsWith('trap')), '9g likes are only touched on videos being processed')
   await api('reposts:dismiss')
   reposts.length = 0
-  await api('reposts:start', { id: A })
+  await clickNav('Обзор'); await api('reposts:start', { id: A })
   const j2 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 30000, 'empty repost job')
   check(j2.status === 'done' && j2.removed === 0, '9d empty reposts tab finishes as done', JSON.stringify(j2))
   await api('reposts:dismiss')

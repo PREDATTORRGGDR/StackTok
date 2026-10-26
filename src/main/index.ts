@@ -155,7 +155,11 @@ const handlers: Record<string, Handler> = {
     const acc = account(a?.id)
     need(!cleaner || cleaner.job.status === 'done' || cleaner.job.status === 'stopped', 'Очистка репостов уже идёт.')
     need(acc.verified && !!acc.username, 'Сначала подтвердите аккаунт на вкладке «Обзор».')
-    cleaner = new RepostCleaner(acc.id, acc.username!, new URL(HOME_URL).origin, push, a.like === true, DEV && !!process.env.STACKTOK_FAST)
+    select(acc.id) // the cleanup runs in the Browse view of this account, the page the user sees
+    cleaner = new RepostCleaner(
+      acc.id, acc.username!, new URL(HOME_URL).origin, browse.contents(acc.id), () => browse.isOnScreen(acc.id), push,
+      a.like === true, DEV && !!process.env.STACKTOK_FAST, DEV && Number(process.env.STACKTOK_MAX_REPOSTS) || undefined
+    )
     void cleaner.run()
     push()
   },

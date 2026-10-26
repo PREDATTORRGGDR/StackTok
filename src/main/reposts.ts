@@ -1,5 +1,5 @@
-import { BrowserWindow } from 'electron'
-import { configureSession, lockDown, partitionFor, sessionState } from './browse'
+import type { WebContents } from 'electron'
+import { sessionState } from './browse'
 
 export type JobStatus = 'running' | 'paused' | 'done' | 'stopped'
 export interface Job { accountId: string; status: JobStatus; removed: number; liked: number; message: string; hasDebug: boolean }
@@ -25,12 +25,12 @@ const listRepostLinks = () =>
   )
 
 /**
- * Finds the repost control. On TikTok it lives in the share dialog as [data-e2e="share-repost"]
- * and reads "Удалить репост" when the video is currently reposted by this account.
+ * Finds the repost control: [data-e2e="video-share-repost"] (inline icon next to the video, tooltip only) or
+ * [data-e2e="share-repost"] (inside the share dialog). It reads "Удалить репост" when the video is currently reposted by this account.
  */
 const findRepost = () => {
   document.querySelectorAll('[data-stacktok-target]').forEach((e) => e.removeAttribute('data-stacktok-target'))
-  const el = document.querySelector('[data-e2e="share-repost"]') as HTMLElement | null
+  const el = document.querySelector('[data-e2e="video-share-repost"], [data-e2e="share-repost"]') as HTMLElement | null
   if (!el) return 'none'
   // Inline layout: the icon has no text (its "Удалить репост" is a hover tooltip), but the page says "Вы сделали репост".
   const label = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim()
@@ -51,7 +51,7 @@ const clickTarget = () => {
 }
 
 const clickShare = () => {
-  const s = document.querySelector('[data-e2e="share-icon"]') as HTMLElement | null
+  const s = document.querySelector('[data-e2e="share-icon"], [data-e2e="share-btn"]') as HTMLElement | null
   if (!s) return false
   s.click()
   return true
@@ -69,7 +69,7 @@ const confirmDialog = () => {
 
 /** Reads the like button state without changing anything. */
 const likeState = () => {
-  const e = document.querySelector('[data-e2e="like-icon"]')
+  const e = document.querySelector('[data-e2e="like-icon"], [data-e2e="browse-like-icon"]')
   const b = e && (e.closest('button, [role="button"]') || e)
   if (!b) return 'none'
   const p = b.getAttribute('aria-pressed')
@@ -82,7 +82,7 @@ const likeState = () => {
 }
 
 const clickLike = () => {
-  const e = document.querySelector('[data-e2e="like-icon"]')
+  const e = document.querySelector('[data-e2e="like-icon"], [data-e2e="browse-like-icon"]')
   const b = (e && (e.closest('button, [role="button"]') || e)) as HTMLElement | null
   if (!b) return false
   b.click()
@@ -92,7 +92,7 @@ const clickLike = () => {
 /** Structure of the page for troubleshooting (markup names only, no personal content). */
 const dumpPage = () => {
   const label = (e: Element) => ((e.getAttribute('aria-label') || (e as HTMLElement).innerText || '') as string).trim().slice(0, 60)
-  const like = document.querySelector('[data-e2e="like-icon"]')
+  const like = document.querySelector('[data-e2e="like-icon"], [data-e2e="browse-like-icon"]')
   return {
     url: location.href,
     title: document.title,
@@ -105,7 +105,17 @@ const dumpPage = () => {
   }
 }
 
-const videoReady = () => !!document.querySelector('[data-e2e="share-icon"], video')
+/** Opens a repost the way a person does: clicks its tile in the Reposts tab (the video opens over the profile). */
+const clickRepostLink = (href: string) => {
+  const a = [...document.querySelectorAll('[data-e2e="user-repost-item"] a[href*="/video/"], [data-e2e="user-post-item"] a[href*="/video/"]')].find(
+    (x) => (x as HTMLAnchorElement).href === href
+  ) as HTMLElement | undefined
+  if (!a) return false
+  a.click()
+  return true
+}
+
+const videoReady = () => !!document.querySelector('[data-e2e="video-share-repost"], [data-e2e="share-repost"], [data-e2e="share-icon"], [data-e2e="share-btn"]')
 
 // ───────── the job ─────────
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -118,17 +128,23 @@ const call = (fn: Function, arg?: unknown) => `(${fn})(${JSON.stringify(arg)})`
 export class RepostCleaner {
   job: Job
   debug = '' // page structure captured when a repost could not be handled
-  private win?: BrowserWindow
   private stopped = false
   private gate?: () => void
 
+  /**
+   * Works inside the app's own Browse view (the page the user sees), so the layout is exactly what they use by hand.
+   * `ready` tells whether that view is currently on screen with a real size.
+   */
   constructor(
     accountId: string,
     private username: string,
     private base: string,
+    private wc: WebContents,
+    private ready: () => boolean,
     private onChange: () => void,
     private like = false, // put a like on each video before removing its repost
-    private fast = false
+    private fast = false,
+    private limit = 1000 // stop after this many removals (used for supervised test runs)
   ) {
     this.job = { accountId, status: 'running', removed: 0, liked: 0, message: 'Запуск…', hasDebug: false }
   }
@@ -141,16 +157,14 @@ export class RepostCleaner {
   stop() {
     this.stopped = true
     this.gate?.()
-    this.win?.destroy()
   }
 
   resume() {
-    if (this.job.status === 'paused') { this.win?.hide(); this.set({ status: 'running', message: 'Продолжаю…' }); this.gate?.() }
+    if (this.job.status === 'paused') { this.set({ status: 'running', message: 'Продолжаю…' }); this.gate?.() }
   }
 
-  /** Stops the loop and waits for the user, with the window open so they can fix whatever blocked it. */
+  /** Waits for the user; the page they must act on is the Browse view right in front of them. */
   private async pause(message: string) {
-    this.win?.show()
     this.set({ status: 'paused', message })
     await new Promise<void>((r) => (this.gate = r))
     this.gate = undefined
@@ -177,39 +191,49 @@ export class RepostCleaner {
   }
 
   async run() {
-    configureSession(this.job.accountId)
+    const wc = this.wc
     if ((await sessionState(this.job.accountId)) !== 'logged_in') return this.set({ status: 'stopped', message: 'Аккаунт не авторизован. Войдите на вкладке «Обзор».' })
-    const win = (this.win = new BrowserWindow({
-      width: 1100, height: 800, show: false, title: 'StackTok: репосты',
-      webPreferences: { partition: partitionFor(this.job.accountId), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } // a hidden window must still render TikTok's UI
-    }))
-    lockDown(win.webContents)
-    const wc = win.webContents
-    const js = <T>(fn: Function, arg?: unknown) => wc.executeJavaScript(call(fn, arg)) as Promise<T>
+    const js = async <T>(fn: Function, arg?: unknown): Promise<T> => {
+      for (let attempt = 0; ; attempt++) {
+        try { return (await wc.executeJavaScript(call(fn, arg))) as T } catch (e) {
+          if (attempt >= 2) throw new Error(`${fn.name || 'script'}: ${(e as Error).message}`)
+          await sleep(600) // the page may be mid-navigation
+        }
+      }
+    }
     const until = async <T>(fn: () => Promise<T>, ms: number): Promise<T | undefined> => {
       const end = Date.now() + (this.fast ? Math.min(ms, 4000) : ms)
-      while (Date.now() < end) {
+      while (Date.now() < end && !this.stopped) {
         const v = await fn().catch(() => undefined)
         if (v) return v
         await sleep(this.fast ? 60 : 400)
       }
     }
+    const goto = async (url: string) => {
+      await wc.loadURL(url).catch(() => {}) // a superseded navigation reports ERR_ABORTED; the page state below is what matters
+      await until(async () => !wc.isLoading(), 20_000)
+    }
     const blocked = async () => {
-      if (/\/login/i.test(wc.getURL())) return 'TikTok просит войти. Войдите в открытом окне и нажмите «Продолжить».'
-      if (await js<boolean>(pageHasChallenge).catch(() => false)) return 'TikTok запрашивает проверку. Пройдите её в открытом окне и нажмите «Продолжить».'
+      if (/\/login/i.test(wc.getURL())) return 'TikTok просит войти. Войдите на этой странице и нажмите «Продолжить».'
+      if (await js<boolean>(pageHasChallenge).catch(() => false)) return 'TikTok запрашивает проверку. Пройдите её на этой странице и нажмите «Продолжить».'
     }
 
     const tried = new Set<string>()
     let failures = 0
     try {
-      for (let i = 0; i < 1000 && !this.stopped; i++) {
+      for (let i = 0; i < 1000 && !this.stopped && this.job.removed < this.limit; i++) {
+        if (!(await until(async () => this.ready(), 20_000))) {
+          await this.pause('Откройте вкладку «Обзор», чтобы страница TikTok была на экране, и нажмите «Продолжить».')
+          if (this.stopped) return
+          i--; continue
+        }
         this.set({ message: this.job.removed ? `Удалено: ${this.job.removed}. Ищу следующий репост…` : 'Открываю профиль…' })
-        await wc.loadURL(`${this.base}/@${encodeURIComponent(this.username)}`)
+        await goto(`${this.base}/@${encodeURIComponent(this.username)}`)
         let why = await blocked()
         if (why) { await this.pause(why); if (this.stopped) return; i--; continue }
 
         if (!(await until(() => js<boolean>(openRepostsTab), 10_000))) {
-          await this.pause('Вкладка «Репосты» не найдена. Откройте её в окне вручную или нажмите «Остановить».')
+          await this.pause('Вкладка «Репосты» не найдена. Откройте её вручную на странице и нажмите «Продолжить».')
           if (this.stopped) return
           i--; continue
         }
@@ -222,11 +246,12 @@ export class RepostCleaner {
         }
         tried.add(next)
 
-        this.set({ message: `Удалено: ${this.job.removed}. Обрабатываю репост…` })
-        await wc.loadURL(next)
+        // Open the video the way a person does: click it in the Reposts tab.
+        this.set({ message: `Удалено: ${this.job.removed}. Открываю репост…` })
+        await js<boolean>(clickRepostLink, next)
         why = await blocked()
         if (why) { await this.pause(why); if (this.stopped) return; tried.delete(next); i--; continue }
-        await until(() => js<boolean>(videoReady), 10_000)
+        await until(() => js<boolean>(videoReady), 12_000)
 
         // The repost control may sit inside the share menu, so look directly first and open the menu only if needed.
         const locate = async () => {
@@ -272,8 +297,6 @@ export class RepostCleaner {
       this.set({ status: 'stopped', message: `Остановлено. Удалено: ${this.job.removed}.` })
     } catch (e) {
       if (!this.stopped) this.set({ status: 'stopped', message: 'Ошибка: ' + (e as Error).message })
-    } finally {
-      if (!win.isDestroyed()) win.destroy()
     }
   }
 }
