@@ -93,6 +93,11 @@ export class Browse {
     v.webContents.setAudioMuted(this.userMuted.get(this.current) ?? true)
   }
 
+  /** The account's Browse view (created on demand); repost cleanup sends its requests from this page. */
+  contents(accountId: string): Electron.WebContents {
+    return this.view(accountId).webContents
+  }
+
   isMuted(): boolean {
     return this.current ? (this.userMuted.get(this.current) ?? true) : true
   }

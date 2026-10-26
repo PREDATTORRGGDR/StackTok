@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { AccountView, Settings } from '@shared/types'
+import { AccountView, Job, Settings } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
   settings: Settings
+  job: Job | null
   activeAccountId?: string
   version: string
   dataPath: string

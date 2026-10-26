@@ -30,4 +30,18 @@ export interface Data {
   activeAccountId?: string
 }
 
+/** Progress of a repost cleanup, pushed to the UI with every change. */
+export interface Job {
+  accountId: string
+  status: 'running' | 'done' | 'stopped'
+  phase: 'scan' | 'delete' | 'verify'
+  found: number // reposts on the profile when the scan finished
+  removed: number
+  failed: number
+  message: string
+  startedAt: number
+  deleteStartedAt?: number // for the time-left estimate
+  finishedAt?: number
+}
+
 export interface Bounds { x: number; y: number; width: number; height: number }
