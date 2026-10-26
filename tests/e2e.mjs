@@ -33,18 +33,20 @@ const server = http.createServer((req, res) => {
   const vid = /^\/@[^/]+\/video\/(\w+)$/.exec(u.pathname)
   if (vid) {
     res.setHeader('content-type', 'text/html; charset=utf-8')
-    return res.end('<!doctype html><body><div data-e2e="share-icon">share</div><button id="b" data-e2e="repost-icon"></button><button id="l" data-e2e="like-icon"></button><script>' +
-      'const id=' + JSON.stringify(vid[1]) + ';let on=' + JSON.stringify(reposted.has(vid[1])) + ';const b=document.getElementById("b");' +
-      'const draw=()=>b.setAttribute("aria-label",on?"Удалить репост":"Репост");draw();' +
-      'const l=document.getElementById("l");let lk=' + JSON.stringify(liked.has(vid[1])) + ';const dl=()=>l.setAttribute("aria-pressed",String(lk));dl();' +
+    return res.end('<!doctype html><body><div class="tag" data-e2e="repost-tag">Вы сделали репост</div><div data-e2e="share-icon" role="button">share</div><div id="l" data-e2e="like-icon" role="button"></div><script>' +
+      'const id=' + JSON.stringify(vid[1]) + ';let on=' + JSON.stringify(reposted.has(vid[1])) + ';let lk=' + JSON.stringify(liked.has(vid[1])) + ';' +
+      'const l=document.getElementById("l");const dl=()=>l.setAttribute("aria-pressed",String(lk));dl();' +
       'l.onclick=async()=>{await fetch("/__like?id="+id);lk=!lk;dl()};' +
-      'b.onclick=async()=>{await fetch(on?"/__unrepost?id="+id:"/__repost?id="+id);on=!on;draw()}</script>')
+      'document.querySelector("[data-e2e=share-icon]").onclick=()=>{if(document.querySelector("[data-e2e=share-repost]"))return;' +
+      'const m=document.createElement("div");m.setAttribute("role","dialog");m.innerHTML=\'<div data-e2e="share-repost"></div>\';document.body.append(m);' +
+      'const r=m.firstChild;const draw=()=>{r.textContent=on?"Удалить репост":"Репост"};draw();' +
+      'r.onclick=async()=>{await fetch(on?"/__unrepost?id="+id:"/__repost?id="+id);on=!on;draw()}}</script>')
   }
   if (/^\/@[^/]+$/.test(u.pathname)) {
     res.setHeader('content-type', 'text/html; charset=utf-8')
     return res.end('<!doctype html><body><p role="tab" data-e2e="videos-tab">Видео</p><p role="tab" data-e2e="repost-tab">Репосты</p><div id="g"></div><script>' +
       'document.querySelector("[data-e2e=repost-tab]").onclick=async()=>{const ids=await (await fetch("/__list")).json();' +
-      'document.getElementById("g").innerHTML=ids.map(i=>\'<div data-e2e="user-post-item"><a href="/@other/video/\'+i+\'">\'+i+"</a></div>").join("")}</script>')
+      'document.getElementById("g").innerHTML=ids.map(i=>\'<div data-e2e="user-repost-item"><a href="/@other/video/\'+i+\'">\'+i+"</a></div>").join("")}</script>')
   }
   let id = cookie
   if (!id) { id = 's' + ++counter; res.setHeader('set-cookie', `sessionid=${id}; Max-Age=86400; Path=/`) }

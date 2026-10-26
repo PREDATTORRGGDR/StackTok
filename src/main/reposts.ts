@@ -24,20 +24,17 @@ const listRepostLinks = () =>
     (a) => (a as HTMLAnchorElement).href
   )
 
-/** Looks for the repost control and reports whether the video is currently reposted by this account. */
+/**
+ * Finds the repost control. On TikTok it lives in the share dialog as [data-e2e="share-repost"]
+ * and reads "Удалить репост" when the video is currently reposted by this account.
+ */
 const findRepost = () => {
   document.querySelectorAll('[data-stacktok-target]').forEach((e) => e.removeAttribute('data-stacktok-target'))
-  const ON = /(удалить|убрать|отменить)\s*репост|remove\s*repost|undo\s*repost|^reposted$|^репостнуто$/i
-  const ANY = /репост|repost/i
-  let off = false
-  for (const el of document.querySelectorAll('[data-e2e*="repost"], button, [role="button"], [role="menuitem"], [role="option"], li')) {
-    const label = ((el.getAttribute('aria-label') || (el as HTMLElement).innerText || '') as string).trim()
-    if (!label || label.length > 60 || !ANY.test(label)) continue
-    const on = ON.test(label) || (el.getAttribute('aria-pressed') === 'true' && ANY.test(label))
-    if (on) { el.setAttribute('data-stacktok-target', '1'); return 'on' }
-    off = true
-  }
-  return off ? 'off' : 'none'
+  const el = document.querySelector('[data-e2e="share-repost"]') as HTMLElement | null
+  if (!el) return 'none'
+  const label = (el.innerText || el.getAttribute('aria-label') || '').trim()
+  if (/удалить|убрать|отменить|remove|undo/i.test(label)) { el.setAttribute('data-stacktok-target', '1'); return 'on' }
+  return 'off'
 }
 
 const clickTarget = () => {
@@ -83,18 +80,6 @@ const clickLike = () => {
   const b = (e && (e.closest('button, [role="button"]') || e)) as HTMLElement | null
   if (!b) return false
   b.click()
-  return true
-}
-
-/** TikTok shows the repost option when the share icon is hovered, so imitate the pointer moving over it. */
-const hoverShare = () => {
-  const s = document.querySelector('[data-e2e="share-icon"]') as HTMLElement | null
-  if (!s) return false
-  for (const el of [s, s.parentElement]) {
-    for (const t of ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'mousemove']) {
-      el?.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }))
-    }
-  }
   return true
 }
 
@@ -240,7 +225,6 @@ export class RepostCleaner {
         // The repost control may sit inside the share menu, so look directly first and open the menu only if needed.
         const locate = async () => {
           let st = await js<string>(findRepost)
-          if (st === 'none' && (await js<boolean>(hoverShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
           if (st === 'none' && (await js<boolean>(clickShare))) { await sleep(this.fast ? 80 : 900); st = await js<string>(findRepost) }
           return st
         }
