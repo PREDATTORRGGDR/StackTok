@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Bug, Eraser, Repeat2, LogIn, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, Users, ArrowRight } from 'lucide-react'
-import { AccountView } from '@shared/types'
+import { Bug, Eraser, LogIn, MessageCircle, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2, Users, ArrowRight } from 'lucide-react'
+import { AccountView, OPEN_IN } from '@shared/types'
 import { AppState, call } from '../api'
 import { Dialog } from '../Dialogs'
 import { Page } from '../App'
 import { Avatar, statusText } from '../ui'
+
+const OPEN_LABEL = { studio: 'Studio', profile: 'Профиль', chats: 'Чаты' }
 
 function Card({ a, i, active, go, openDialog }: { a: AccountView; i: number; active: boolean; go: (p: Page) => void; openDialog: (d: Dialog) => void }) {
   const [menu, setMenu] = useState(false)
@@ -15,7 +17,7 @@ function Card({ a, i, active, go, openDialog }: { a: AccountView; i: number; act
     return () => window.removeEventListener('click', h)
   }, [menu])
   const signedIn = a.session === 'logged_in'
-  const open = () => { call('account:select', { id: a.id }); go('browse') }
+  const open = () => { call('account:open', { id: a.id }); go('browse') }
   const item = (icon: React.ReactNode, text: string, fn: () => void, danger = false) => (
     <button className={danger ? 'danger' : ''} onClick={() => { setMenu(false); fn() }}>{icon}{text}</button>
   )
@@ -45,9 +47,13 @@ function Card({ a, i, active, go, openDialog }: { a: AccountView; i: number; act
         {a.verified && <span className="pill accent"><ShieldCheck size={13} />Подтверждён</span>}
         {active && <span className="pill">Активный</span>}
       </div>
+      <div className="openin">
+        <span className="muted small">Открывать в</span>
+        <div className="seg sm">{OPEN_IN.map((v) => <button key={v} className={a.openIn === v ? 'on' : ''} onClick={() => call('account:openIn', { id: a.id, value: v })}>{OPEN_LABEL[v]}</button>)}</div>
+      </div>
       <div className="actions">
         <button className="btn primary" onClick={open}>{signedIn ? 'Открыть' : 'Войти'}<ArrowRight size={15} /></button>
-        <button className="btn" disabled={!signedIn} title={signedIn ? 'Удалить все репосты этого аккаунта' : 'Сначала войдите в аккаунт'} onClick={() => openDialog({ kind: 'reposts', acct: a })}><Repeat2 size={15} />Репосты</button>
+        <button className="btn" disabled={!signedIn} title={signedIn ? 'Открыть сообщения этого аккаунта' : 'Сначала войдите в аккаунт'} onClick={() => { call('account:chats', { id: a.id }); go('browse') }}><MessageCircle size={15} />Чаты</button>
       </div>
     </div>
   )

@@ -17,7 +17,10 @@ const PORT = 9333
 // ---------- mock site: hands each fresh browser profile its own login cookie ----------
 let counter = 0
 const seenHome = []
+const dlHits = [] // requests of the downloader view: must never carry an account's cookie
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/profile')) { res.statusCode = 403; return res.end('forbidden') } // like TikTok sometimes does
+  if (req.url.startsWith('/dl')) { dlHits.push(req.headers.cookie ?? ''); res.setHeader('content-type', 'text/html'); return res.end('<!doctype html><title>mock downloader</title><h1>Mock downloader</h1>') }
   const cookie = /sessionid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
   let id = cookie
   if (!id) { id = 's' + ++counter; res.setHeader('set-cookie', `sessionid=${id}; Max-Age=86400; Path=/`) }
@@ -39,7 +42,7 @@ async function until(fn, ms = 20000, what = 'condition') {
 }
 async function launch() {
   proc = spawn(electron, ['.', `--remote-debugging-port=${PORT}`], {
-    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/' }, stdio: 'ignore'
+    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_DOWNLOADER_URL: base + '/dl' }, stdio: 'ignore'
   })
   const target = await until(async () => {
     const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
@@ -116,6 +119,59 @@ try {
   const parts = fs.readdirSync(path.join(userData, 'Partitions'))
   check(parts.some((p) => p.includes(A)) && parts.some((p) => p.includes(B)), '3d separate on-disk profile folder per account', parts.join(','))
 
+  // a 403 on the start page falls back to Studio and tells the user instead of leaving a blank page
+  await api('account:openIn', { id: B, value: 'profile' })
+  await api('account:open', { id: B })
+  await until(async () => (await state()).notice?.text.includes('403'), 10000, 'notice about 403')
+  check(true, '12 a 403 on the start page shows a notice (Studio is opened instead)')
+  await api('account:openIn', { id: B, value: 'studio' })
+  await api('account:open', { id: B })
+
+  // downloader: its own isolated view, opened only from its page, never sharing an account's cookies
+  await clickNav('Загрузчик')
+  await until(async () => (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).some((t) => t.type === 'page' && t.url.endsWith('/dl')), 10000, 'downloader view')
+  check(dlHits.length > 0 && dlHits.every((c) => !c.includes('sessionid')), '10 downloader loads in its own view without any account cookie', dlHits.join('|'))
+  await clickNav('Обзор')
+
+  // start page per account
+  await api('account:openIn', { id: B, value: 'chats' })
+  check((await state()).accounts.find((a) => a.id === B).openIn === 'chats', '11 start page is stored per account')
+  let bad = false
+  try { await api('account:openIn', { id: B, value: 'http://evil' }) } catch { bad = true }
+  check(bad && (await state()).accounts.find((a) => a.id === B).openIn === 'chats', '11b an unknown start page is refused')
+  await api('account:openIn', { id: B, value: 'studio' })
+  await api('account:openIn', { id: A, value: 'profile' }) // must survive the restart below
+
+  // chat overlay: injected only on the /messages page, and switched off by chatOverlay
+  const views = async () => (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).filter((t) => t.type === 'page' && t.url.startsWith(base) && !t.url.endsWith('/dl'))
+  const inView = async (t, expr) => {
+    const w = new WebSocket(t.webSocketDebuggerUrl)
+    await new Promise((r) => (w.onopen = r))
+    const out = await new Promise((r) => { w.onmessage = (e) => r(JSON.parse(e.data)); w.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: expr, returnByValue: true, awaitPromise: true } })) })
+    w.close()
+    return out.result?.result?.value
+  }
+  const wall = (t) => inView(t, `getComputedStyle(document.documentElement, '::before').content`)
+  await api('settings:set', { chatOverlay: true, chatWallpaper: 'aurora' })
+  const [v1, v2] = await views()
+  await inView(v1, `location.href = '/messages'`)
+  await until(async () => (await wall((await views()).find((t) => t.url.endsWith('/messages')))) === '""', 8000, 'wallpaper on /messages')
+  check(true, '9 wallpaper is injected on the messages page')
+  if (v2) check((await wall((await views()).find((t) => !t.url.endsWith('/messages')))) === 'none', '9b other pages are left untouched')
+  await api('settings:set', { chatOverlay: false })
+  await until(async () => (await wall((await views()).find((t) => t.url.endsWith('/messages')))) === 'none', 8000, 'overlay off')
+  check(true, '9c chatOverlay=false removes the styles')
+  s = await state()
+  check(s.settings.chatOverlay === false && s.settings.chatWallpaper === 'aurora', '9d chat settings are stored')
+  await api('settings:set', { chatPrivacy: true, chatDim: 70, chatTextSize: 'large' })
+  s = await state()
+  check(s.settings.chatPrivacy === true && s.settings.chatDim === 70 && s.settings.chatTextSize === 'large', '9f chat extras are stored')
+  await api('settings:set', { chatPrivacy: false, chatDim: 50, chatTextSize: 'normal' })
+  await api('settings:set', { chatWallpaper: 'custom' }) // no picked file: must be refused
+  check((await state()).settings.chatWallpaper === 'aurora', '9e "custom" is refused without a picked file')
+  await api('settings:set', { chatOverlay: true, chatWallpaper: 'none' })
+  await inView((await views()).find((t) => t.url.endsWith('/messages')), `location.href = '/'`)
+
   await api('account:rename', { id: C, label: 'Мемы 2' })
   await api('settings:set', { theme: 'light', accent: 'pink', background: 'sunset', glass: 80, restoreLast: false })
   await api('settings:set', { theme: 'bogus', glass: 9999 })
@@ -126,10 +182,12 @@ try {
   await api('settings:set', { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55 })
   await clickNav('Аккаунты'); await shot('accounts-dark')
   await clickNav('Настройки'); await shot('settings-dark')
+  await evalJs(`document.querySelector('.content').scrollTop = 9999`); await shot('settings-chats-dark')
   await clickNav('Обзор'); await shot('browse-dark')
   await api('settings:set', { theme: 'light', background: 'sunset', accent: 'pink' })
   await clickNav('Аккаунты'); await shot('accounts-light')
   await clickNav('Настройки'); await shot('settings-light')
+  await evalJs(`document.querySelector('.content').scrollTop = 9999`); await shot('settings-chats-light')
   await api('settings:set', { theme: 'dark', background: 'ocean', accent: 'violet', restoreLast: true })
 
   // restart: everything persists
@@ -138,6 +196,7 @@ try {
   s = await state()
   check(s.accounts.length === 3 && s.accounts.find((a) => a.id === A).username === ida, '4 account metadata survives restart')
   check(s.accounts.find((a) => a.id === C).label === 'Мемы 2' && s.settings.background === 'ocean' && s.settings.restoreLast, '4b renames and settings survive restart')
+  check(s.accounts.find((a) => a.id === A).openIn === 'profile', '4d start page survives restart')
   await until(async () => (await state()).accounts.find((a) => a.id === A).session === 'logged_in', 10000, 'session after restart')
   check(true, '4c login session survives restart')
 

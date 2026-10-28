@@ -3,7 +3,7 @@ import { AccountView } from '@shared/types'
 import { call } from './api'
 import { Modal } from './ui'
 
-export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'reposts'; acct: AccountView }
+export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe'; acct: AccountView }
 
 export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () => void; onAdded: () => void }) {
   const [text, setText] = useState(dialog.kind === 'rename' ? dialog.acct.label : '')
@@ -13,7 +13,6 @@ export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () 
   async function submit() {
     if (dialog.kind === 'add') { if (await call('account:add', { label: text })) { onAdded(); close() } return }
     if (dialog.kind === 'rename') await call('account:rename', { id: dialog.acct.id, label: text })
-    else if (dialog.kind === 'reposts') { if ((await call('reposts:start', { id: dialog.acct.id })) === undefined) return }
     else if (dialog.kind === 'remove') await call('account:remove', { id: dialog.acct.id, wipe })
     else await call('account:wipe', { id: dialog.acct.id })
     close()
@@ -41,17 +40,10 @@ export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () 
           <span className="muted small">«{dialog.acct.label}» будет разлогинен, cookies, хранилище и кэш очистятся. Сам аккаунт останется в списке.</span>
         </>
       )}
-      {dialog.kind === 'reposts' && (
-        <>
-          <h3>Удалить все репосты?</h3>
-          <span className="muted small">У аккаунта «{dialog.acct.label}»{dialog.acct.username ? ` (@${dialog.acct.username})` : ''} будут убраны все репосты. Собственные видео, лайки и подписки не затрагиваются. Вернуть репосты автоматически нельзя.</span>
-          <span className="muted small">Можно пользоваться приложением, пока идёт очистка: прогресс будет в углу окна.</span>
-        </>
-      )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
         <button className="btn" onClick={close}>Отмена</button>
-        <button className={'btn primary' + (dialog.kind === 'reposts' ? ' danger-fill' : '')} disabled={typing && !text.trim()} onClick={submit}>
-          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : dialog.kind === 'reposts' ? 'Удалить репосты' : wipe ? 'Убрать и стереть' : 'Убрать'}
+        <button className="btn primary" disabled={typing && !text.trim()} onClick={submit}>
+          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : wipe ? 'Убрать и стереть' : 'Убрать'}
         </button>
       </div>
     </Modal>

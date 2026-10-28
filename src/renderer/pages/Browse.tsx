@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bug, ExternalLink, Home, Plus, RotateCw, ShieldCheck, Users, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bug, ExternalLink, Home, MessageCircle, Plus, RotateCw, ShieldCheck, Users, Volume2, VolumeX } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { call } from '../api'
 import { Dialog } from '../Dialogs'
@@ -70,6 +70,7 @@ export function Browse({ active, go, openDialog }: { active?: AccountView; go: (
         <button className="btn ghost round" aria-label="Вперёд" onClick={() => nav('forward')}><ArrowRight size={17} /></button>
         <button className="btn ghost round" aria-label="Обновить" onClick={() => nav('reload')}><RotateCw size={16} /></button>
         <button className="btn ghost round" aria-label="Домой" onClick={() => nav('home')}><Home size={17} /></button>
+        <button className="btn ghost sm" title="Открыть сообщения этого аккаунта" onClick={() => call('account:chats', { id: active.id })}><MessageCircle size={16} />Чаты</button>
         <button className="btn ghost round" aria-label={muted ? 'Включить звук' : 'Выключить звук'} title={muted ? 'Звук выключен — нажмите, чтобы включить' : 'Выключить звук'} onClick={async () => setMuted((await call<boolean>('browse:toggleMute')) ?? muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
         <span style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={() => call('browse:external')} title="Если встроенный просмотр заблокирован, откройте в браузере по умолчанию"><ExternalLink size={15} />Открыть в браузере</button>

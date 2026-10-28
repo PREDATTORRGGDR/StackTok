@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { ACCENTS, BACKGROUNDS, Settings, THEMES } from '@shared/types'
+import { ACCENTS, BACKGROUNDS, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, Settings, THEMES } from '@shared/types'
 import { AppState, call } from '../api'
 
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая', system: 'Системная' }
@@ -12,6 +12,11 @@ const BG_GRADIENT = {
   ocean: 'linear-gradient(135deg,#0a84ff,#00c2c7 55%,#3d5bff)',
   graphite: 'linear-gradient(135deg,#4b5160,#2a2f3b 55%,#646c80)'
 }
+
+const TEXT_LABEL = { small: 'Мелкий', normal: 'Обычный', large: 'Крупный' }
+const WALLPAPERS = CHAT_WALLPAPERS.filter((w) => w !== 'custom')
+const WP_LABEL = { none: 'Без обоев', ...BG_LABEL }
+const WP_GRADIENT = { none: 'transparent', ...BG_GRADIENT }
 
 const Row = ({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) => (
   <div className="setting">
@@ -55,8 +60,33 @@ export function SettingsPage({ s }: { s: AppState }) {
       </div>
 
       <div className="glass group">
+        <h4>Чаты TikTok</h4>
+        <Row label="Оформление чатов" hint="Стекло и мягкие скругления на странице сообщений TikTok. Логику сайта не трогает">
+          <label className="switch"><input type="checkbox" checked={st.chatOverlay} onChange={(e) => set({ chatOverlay: e.target.checked })} /><span className="track" /><span className="thumb" /></label>
+        </Row>
+        <Row label="Обои чатов" hint={st.chatWallpaper === 'custom' ? 'Выбрана своя картинка' : 'Лёгкий узор поверх страницы сообщений'}>
+          <div className="bgs">{WALLPAPERS.map((w) => <button key={w} className={'bgtile' + (st.chatWallpaper === w ? ' on' : '') + (w === 'none' ? ' none' : '')} style={{ background: WP_GRADIENT[w] }} onClick={() => set({ chatWallpaper: w })}><span>{WP_LABEL[w]}</span></button>)}</div>
+        </Row>
+        <Row label="Затемнение обоев" hint="Чем больше, тем лучше читается текст поверх картинки">
+          <input className="slider" type="range" min={0} max={100} value={st.chatDim} style={{ ['--p' as string]: st.chatDim + '%' }} onChange={(e) => set({ chatDim: Number(e.target.value) })} />
+        </Row>
+        <Row label="Размер текста в чатах">
+          <div className="seg">{CHAT_TEXT_SIZES.map((t) => <button key={t} className={st.chatTextSize === t ? 'on' : ''} onClick={() => set({ chatTextSize: t })}>{TEXT_LABEL[t]}</button>)}</div>
+        </Row>
+        <Row label="Режим приватности" hint="Имена, превью и сообщения размыты, пока не наведёте мышь. Удобно при записи экрана">
+          <label className="switch"><input type="checkbox" checked={st.chatPrivacy} onChange={(e) => set({ chatPrivacy: e.target.checked })} /><span className="track" /><span className="thumb" /></label>
+        </Row>
+        <Row label="Своя картинка" hint="PNG, JPG или WebP до 2 МБ">
+          <div className="row">
+            <button className="btn" onClick={() => call('chat:wallpaperPick')}>Выбрать файл…</button>
+            <button className="btn" disabled={st.chatWallpaper === 'none'} onClick={() => call('chat:wallpaperReset')}>Сбросить</button>
+          </div>
+        </Row>
+      </div>
+
+      <div className="glass group">
         <h4>Данные</h4>
-        <Row label="Папка данных" hint="Список аккаунтов и профили браузера (входы). Храните копию приватно.">
+        <Row label="Папка данных" hint="Список аккаунтов, обои чатов и профили браузера (входы). Храните копию приватно.">
           <button className="btn" onClick={() => call('data:open')}>Открыть папку</button>
         </Row>
         <div style={{ padding: '0 0 14px' }}><code>{s.dataPath}</code></div>

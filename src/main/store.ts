@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ACCENTS, BACKGROUNDS, Data, Settings, THEMES } from '../shared/types'
+import { ACCENTS, BACKGROUNDS, CHAT_TEXT_SIZES, OPEN_IN, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true, muteByDefault: true }
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal' }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -20,6 +20,7 @@ export function sanitize(raw: any): Data {
       username: str(a.username) || undefined,
       avatar: str(a.avatar) || undefined,
       verified: a.verified === true,
+      openIn: pick(a.openIn, OPEN_IN, 'studio'),
       createdAt: num(a.createdAt) ?? Date.now()
     }))
   return {
@@ -31,7 +32,12 @@ export function sanitize(raw: any): Data {
       background: pick(s.background, BACKGROUNDS, DEFAULT_SETTINGS.background),
       glass: Math.min(100, Math.max(0, num(s.glass) ?? DEFAULT_SETTINGS.glass)),
       restoreLast: s.restoreLast !== false,
-      muteByDefault: s.muteByDefault !== false
+      muteByDefault: s.muteByDefault !== false,
+      chatOverlay: s.chatOverlay !== false,
+      chatWallpaper: pick(s.chatWallpaper, CHAT_WALLPAPERS, DEFAULT_SETTINGS.chatWallpaper),
+      chatDim: Math.min(100, Math.max(0, num(s.chatDim) ?? DEFAULT_SETTINGS.chatDim)),
+      chatPrivacy: s.chatPrivacy === true,
+      chatTextSize: pick(s.chatTextSize, CHAT_TEXT_SIZES, DEFAULT_SETTINGS.chatTextSize)
     },
     activeAccountId: accounts.some((a: any) => a.id === r.activeAccountId) ? r.activeAccountId : undefined
   }

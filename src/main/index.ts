@@ -1,9 +1,10 @@
 import { BrowserWindow, app, ipcMain, nativeTheme, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, SessionState, Settings, THEMES } from '../shared/types'
-import { Browse, HOME_URL, configureSession, sessionState } from './browse'
-import { RepostCleaner } from './reposts'
+import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
+import { Browse, HOME_URL, configureSession, sessionState, startUrl } from './browse'
+import { ChatOverlay } from './chat-overlay'
+import { Downloader } from './downloader'
 import { Store } from './store'
 
 const DEV = !app.isPackaged
@@ -14,7 +15,9 @@ if (DEV && process.env.STACKTOK_USER_DATA) app.setPath('userData', process.env.S
 let win: BrowserWindow
 let store: Store
 let browse: Browse
-let cleaner: RepostCleaner | undefined // at most one repost cleanup at a time
+let overlay: ChatOverlay
+let downloader: Downloader
+let notice: { id: number; text: string } | null = null // one-off message for the UI, shown as a toast
 
 // ---------- validation ----------
 const isStr = (v: unknown, max = 500): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -40,7 +43,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, job: cleaner?.job ?? null, settings: d.settings, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -81,13 +84,17 @@ function select(id: string | undefined) {
 }
 
 // ---------- IPC ----------
+const toBounds = (b: Bounds | null): Bounds | null =>
+  b && [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))
+    ? { x: Math.round(b.x), y: Math.round(b.y), width: Math.max(0, Math.round(b.width)), height: Math.max(0, Math.round(b.height)) }
+    : null
 type Handler = (arg: any) => unknown | Promise<unknown>
 const handlers: Record<string, Handler> = {
   'state:get': () => snapshot(),
 
   'account:add': (a: { label: string }) => {
     need(isStr(a?.label, 60), 'Введите название.')
-    const acc = { id: randomUUID(), label: a.label.trim(), verified: false, createdAt: Date.now() }
+    const acc = { id: randomUUID(), label: a.label.trim(), verified: false, openIn: 'studio' as const, createdAt: Date.now() }
     store.data.accounts.push(acc)
     watchSession(acc.id)
     select(acc.id)
@@ -111,7 +118,6 @@ const handlers: Record<string, Handler> = {
   // Removing keeps the stored browser profile unless `wipe` is explicitly set.
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
     const acc = account(a?.id)
-    if (cleaner?.job.accountId === acc.id) cleaner.stop()
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
     store.data.accounts = store.data.accounts.filter((x) => x.id !== acc.id)
@@ -125,11 +131,24 @@ const handlers: Record<string, Handler> = {
     store.save(); push()
   },
   'account:devtools': () => browse.devtools(),
-
-  'browse:bounds': (b: Bounds | null) => {
-    const ok = b && [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))
-    browse.setBounds(ok ? { x: Math.round(b!.x), y: Math.round(b!.y), width: Math.max(0, Math.round(b!.width)), height: Math.max(0, Math.round(b!.height)) } : null)
+  // Opens the account on its own start page (the user chose it on the Accounts page).
+  'account:open': (a: { id: string }) => {
+    const acc = account(a?.id)
+    select(acc.id)
+    browse.open(acc.id)
   },
+  'account:chats': (a: { id: string }) => {
+    const acc = account(a?.id)
+    select(acc.id)
+    browse.open(acc.id, startUrl('chats'))
+  },
+  'account:openIn': (a: { id: string; value: string }) => {
+    need(OPEN_IN.includes(a?.value as any), 'Bad value.')
+    account(a.id).openIn = a.value as (typeof OPEN_IN)[number]
+    store.save(); push()
+  },
+
+  'browse:bounds': (b: Bounds | null) => browse.setBounds(toBounds(b)),
   'browse:nav': (a: 'back' | 'forward' | 'reload' | 'home') => {
     need(['back', 'forward', 'reload', 'home'].includes(a), 'Bad action.')
     browse.nav(a)
@@ -137,6 +156,13 @@ const handlers: Record<string, Handler> = {
   'browse:external': () => browse.openExternal(),
   'browse:muted': () => browse.isMuted(),
   'browse:toggleMute': () => browse.toggleMute(),
+
+  'downloader:bounds': (b: Bounds | null) => downloader.setBounds(toBounds(b)),
+  'downloader:nav': (a: 'back' | 'forward' | 'reload' | 'home') => {
+    need(['back', 'forward', 'reload', 'home'].includes(a), 'Bad action.')
+    downloader.nav(a)
+  },
+  'downloader:external': () => downloader.openExternal(),
 
   'settings:set': (s: Partial<Settings>) => {
     const cur = store.data.settings
@@ -146,25 +172,28 @@ const handlers: Record<string, Handler> = {
     if (typeof s?.glass === 'number' && Number.isFinite(s.glass)) cur.glass = Math.min(100, Math.max(0, Math.round(s.glass)))
     if (typeof s?.restoreLast === 'boolean') cur.restoreLast = s.restoreLast
     if (typeof s?.muteByDefault === 'boolean') cur.muteByDefault = s.muteByDefault
+    if (typeof s?.chatOverlay === 'boolean') cur.chatOverlay = s.chatOverlay
+    if (typeof s?.chatPrivacy === 'boolean') cur.chatPrivacy = s.chatPrivacy
+    if (typeof s?.chatDim === 'number' && Number.isFinite(s.chatDim)) cur.chatDim = Math.min(100, Math.max(0, Math.round(s.chatDim)))
+    if (CHAT_TEXT_SIZES.includes(s?.chatTextSize as any)) cur.chatTextSize = s.chatTextSize!
+    if (CHAT_WALLPAPERS.includes(s?.chatWallpaper as any) && (s.chatWallpaper !== 'custom' || overlay.hasImage())) cur.chatWallpaper = s.chatWallpaper!
     applyOverlay()
     applyBackground()
+    overlay.refresh()
     store.save(); push()
   },
-  // Removes all of the account's reposts through TikTok's own web endpoints.
-  'reposts:start': (a: { id: string }) => {
-    const acc = account(a?.id)
-    need(!cleaner || cleaner.job.status !== 'running', 'Очистка репостов уже идёт.')
-    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
-    cleaner = new RepostCleaner(
-      acc.id, acc.verified ? acc.username : undefined, new URL(HOME_URL).origin, browse.contents(acc.id), push,
-      DEV && !!process.env.STACKTOK_FAST, (DEV && Number(process.env.STACKTOK_MAX_REPOSTS)) || Infinity
-    )
-    void cleaner.run()
-    push()
+  // The picked image is validated and kept in main; the UI only learns that 'custom' is set.
+  'chat:wallpaperPick': async () => {
+    if (!(await overlay.pick(win))) return false
+    store.data.settings.chatWallpaper = 'custom'
+    store.save(); push()
     return true
   },
-  'reposts:stop': () => { cleaner?.stop(); push() },
-  'reposts:dismiss': () => { if (cleaner && cleaner.job.status !== 'running') cleaner = undefined; push() },
+  'chat:wallpaperReset': () => {
+    overlay.clearImage()
+    store.data.settings.chatWallpaper = 'none'
+    store.save(); push()
+  },
   'data:open': () => shell.openPath(app.getPath('userData'))
 }
 
@@ -197,13 +226,18 @@ function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   win.on('closed', () => app.quit())
-  browse = new Browse(win, () => store.data.settings.muteByDefault)
+  downloader = new Downloader(win)
+  browse = new Browse(win, () => store.data.settings.muteByDefault, (wc) => overlay.attach(wc), (id) => store.data.accounts.find((x) => x.id === id)?.openIn ?? 'studio', (id) => {
+    notice = { id: (notice?.id ?? 0) + 1, text: `«${store.data.accounts.find((x) => x.id === id)?.label ?? 'Аккаунт'}»: TikTok не отдал страницу (403). Открыт Studio, попробуйте «Домой» позже.` }
+    push()
+  })
   wc.once('did-finish-load', () => { browse.show(store.data.activeAccountId); applyOverlay(); applyBackground() })
   nativeTheme.on('updated', applyOverlay)
 }
 
 app.whenReady().then(() => {
   store = new Store(join(app.getPath('userData'), 'stacktok.json'))
+  overlay = new ChatOverlay(() => store.data.settings, join(app.getPath('userData'), 'chat-wallpaper.txt'), DEV ? new URL(HOME_URL).origin : undefined)
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()

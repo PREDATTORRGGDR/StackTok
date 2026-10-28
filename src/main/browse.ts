@@ -1,17 +1,32 @@
 import { BrowserWindow, WebContentsView, app, session, shell } from 'electron'
-import { Bounds, SessionState } from '../shared/types'
+import { Bounds, OpenIn, SessionState } from '../shared/types'
 
 // Dev builds can point at a mock site for tests; packaged builds always use TikTok.
 export const HOME_URL = (!app.isPackaged && process.env.STACKTOK_HOME_URL) || 'https://www.tiktok.com/tiktokstudio/content'
+/** Start page for an account. /profile is TikTok's own redirect to the signed-in user's profile. */
+export const startUrl = (openIn: OpenIn) =>
+  openIn === 'chats' ? new URL('/messages', HOME_URL).href : openIn === 'profile' ? new URL('/profile', HOME_URL).href : HOME_URL
 export const partitionFor = (accountId: string) => `persist:acct-${accountId}`
 
 const isHttp = (url: string) => /^https?:\/\//i.test(url)
+
+/** The page's own site only (the dev mock host counts too); iframes and redirects to other sites are not trusted. */
+function isTikTok(url: string) {
+  try {
+    const h = new URL(url).hostname
+    return h === 'tiktok.com' || h.endsWith('.tiktok.com') || h === new URL(HOME_URL).hostname
+  } catch {
+    return false
+  }
+}
 
 /** Chromium UA without the Electron/app tokens, so the site sees an ordinary Chromium build. */
 function configureSession(accountId: string) {
   const ses = session.fromPartition(partitionFor(accountId))
   ses.setUserAgent(app.userAgentFallback.replace(/\s(Electron|stacktok)\/\S+/gi, ''))
-  ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
+  // TikTok pages may use the permissions they ask for (copy link, notifications, camera for uploads...); any other origin gets nothing.
+  ses.setPermissionRequestHandler((_wc, _perm, cb, details) => cb(isTikTok(details.requestingUrl)))
+  ses.setPermissionCheckHandler((_wc, _perm, origin) => isTikTok(origin))
   return ses
 }
 
@@ -39,7 +54,7 @@ export class Browse {
 
   private userMuted = new Map<string, boolean>() // what the user chose per account
 
-  constructor(private win: BrowserWindow, private muteByDefault: () => boolean) {}
+  constructor(private win: BrowserWindow, private muteByDefault: () => boolean, private onView: (wc: Electron.WebContents) => void, private openIn: (accountId: string) => OpenIn, private onBlocked: (accountId: string) => void) {}
 
   private view(accountId: string): WebContentsView {
     let v = this.views.get(accountId)
@@ -55,10 +70,19 @@ export class Browse {
         }
       })
       lockDown(v.webContents)
+      // TikTok sometimes answers a profile or chat page with 403 and an empty body. Don't retry it: show Studio and tell the user.
+      const wc = v.webContents
+      wc.on('did-navigate', (_e, url, code) => {
+        if (code === 403 && isHttp(url) && new URL(url).pathname !== new URL(HOME_URL).pathname) {
+          wc.loadURL(HOME_URL).catch(() => {})
+          this.onBlocked(accountId)
+        }
+      })
+      this.onView(v.webContents)
       this.userMuted.set(accountId, this.muteByDefault())
       v.webContents.setAudioMuted(true) // silent until the view is actually on screen
       v.setBorderRadius(18) // matches the glass frame around it
-      v.webContents.loadURL(HOME_URL).catch(() => {})
+      v.webContents.loadURL(startUrl(this.openIn(accountId))).catch(() => {})
       this.views.set(accountId, v)
     }
     return v
@@ -93,11 +117,6 @@ export class Browse {
     v.webContents.setAudioMuted(this.userMuted.get(this.current) ?? true)
   }
 
-  /** The account's Browse view (created on demand); repost cleanup sends its requests from this page. */
-  contents(accountId: string): Electron.WebContents {
-    return this.view(accountId).webContents
-  }
-
   isMuted(): boolean {
     return this.current ? (this.userMuted.get(this.current) ?? true) : true
   }
@@ -110,13 +129,18 @@ export class Browse {
     return next
   }
 
+  /** Loads a page in the account's view (created on demand); a view created just now already starts on the account's own page. */
+  open(accountId: string, url = startUrl(this.openIn(accountId))) {
+    this.view(accountId).webContents.loadURL(url).catch(() => {})
+  }
+
   nav(action: 'back' | 'forward' | 'reload' | 'home') {
     const wc = this.current && this.views.get(this.current)?.webContents
     if (!wc) return
     if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
     else if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
     else if (action === 'reload') wc.reload()
-    else if (action === 'home') wc.loadURL(HOME_URL)
+    else if (action === 'home' && this.current) wc.loadURL(startUrl(this.openIn(this.current)))
   }
 
   openExternal() {
