@@ -42,3 +42,6 @@ export interface Data {
 }
 
 export interface Bounds { x: number; y: number; width: number; height: number }
+
+/** Progress of a running chat export: messages loaded and read, then files saved, then the file written. */
+export interface ChatExportProgress { phase: 'loading' | 'reading' | 'media' | 'saving'; done: number; total?: number }

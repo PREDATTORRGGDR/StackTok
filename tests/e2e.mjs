@@ -18,7 +18,63 @@ const PORT = 9333
 let counter = 0
 const seenHome = []
 const dlHits = [] // requests of the downloader view: must never carry an account's cookie
+// A chat whose older messages load only when the list is scrolled to the top, like TikTok's.
+// Query: n = messages, page = messages per load, d = ms per load, big = every k-th message carries a 3 MB picture, virt = draw only a window.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+const BIG = Buffer.concat([PNG, Buffer.alloc(3 * 1024 * 1024)])
+const chatPage = `<!doctype html><meta charset="utf-8"><body style="margin:0;font-family:sans-serif;background:#1b1d2a;color:#fff">
+<div data-e2e="dm-new-chatbox"><div><img data-e2e="top-chat-avatar" src="/img/s.png" width="32" height="32"><span data-e2e="dm-new-chat-nickname">Тест Собеседник</span><span data-e2e="chat-uniqueid">test_partner</span></div>
+<div data-e2e="dm-new-message-list" style="height:300px;overflow-y:auto"></div></div>
+<script>
+const P = new URLSearchParams(location.search)
+const TOTAL = +P.get('n') || 95, PAGE = +P.get('page') || 30, DELAY = P.has('d') ? +P.get('d') : 150, BIG = +P.get('big') || 0
+const list = document.querySelector('[data-e2e="dm-new-message-list"]')
+const body = (i) => i % 10 === 5 ? '<img src="/img/s.png" width="96" height="96">'
+  : BIG && i % BIG === 1 ? '<img src="/img/big.png?v=' + (i % 3) + '" width="96" height="96">'
+  : i % 17 === 3 ? '<div data-e2e="dm-new-shared-video"><a href="https://www.tiktok.com/@x/video/' + i + '"><img src="/img/s.png"><p>Видео ' + i + '</p></a></div>'
+  : i === 7 ? '<div data-e2e="dm-new-message-text"><p>Привет &lt;script&gt;alert(1)&lt;/script&gt; <img alt="😀" src="/img/s.png"></p></div>'
+  : '<div data-e2e="dm-new-message-text"><p>Сообщение №' + i + '</p></div>'
+const row = (i, style = '') => {
+  const me = i % 3 === 0
+  const sep = !P.has('virt') && i % 20 === 0 ? '<div data-e2e="dm-new-time-separator">День ' + i / 20 + '</div>' : ''
+  return sep + '<div data-e2e="dm-new-chat-item" style="display:flex;justify-content:' + (me ? 'flex-end' : 'flex-start') + ';padding:4px;' + style + '"><div>' + body(i) + '<span style="font-size:10px">12:' + String(i % 60).padStart(2, '0') + '</span></div></div>'
+}
+if (P.has('virt')) {
+  // every message is known, but only the ones near the viewport are in the DOM
+  const H = 40
+  list.style.position = 'relative'
+  list.innerHTML = '<div style="height:' + TOTAL * H + 'px"></div>'
+  const spacer = list.firstChild
+  const draw = () => {
+    list.querySelectorAll('[data-e2e="dm-new-chat-item"]').forEach((e) => e.remove())
+    const a = Math.max(0, Math.floor(list.scrollTop / H) - 4), b = Math.min(TOTAL, Math.ceil((list.scrollTop + list.clientHeight) / H) + 4)
+    for (let i = a; i < b; i++) list.insertAdjacentHTML('beforeend', row(i, 'position:absolute;left:0;right:0;height:' + H + 'px;box-sizing:border-box;top:' + i * H + 'px'))
+  }
+  list.addEventListener('scroll', draw)
+  draw()
+  list.scrollTop = list.scrollHeight
+} else {
+  let from = Math.max(0, TOTAL - PAGE)
+  const rows = (a, b) => Array.from({ length: b - a }, (_, k) => row(a + k)).join('')
+  list.innerHTML = rows(from, TOTAL)
+  list.scrollTop = list.scrollHeight
+  let loading = false
+  list.addEventListener('scroll', () => {
+    if (list.scrollTop > 40 || from <= 0 || loading) return
+    loading = true
+    setTimeout(() => {
+      const n = Math.min(PAGE, from), old = list.scrollHeight
+      from -= n
+      list.insertAdjacentHTML('afterbegin', rows(from, from + n))
+      list.scrollTop += list.scrollHeight - old
+      loading = false
+    }, DELAY)
+  })
+}
+</script>`
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/img/')) { res.setHeader('content-type', 'image/png'); return res.end(req.url.startsWith('/img/big') ? BIG : PNG) }
+  if (req.url.startsWith('/messages')) { res.setHeader('content-type', 'text/html'); return res.end(chatPage) }
   if (req.url.startsWith('/profile')) { res.statusCode = 403; return res.end('forbidden') } // like TikTok sometimes does
   if (req.url.startsWith('/dl')) { dlHits.push(req.headers.cookie ?? ''); res.setHeader('content-type', 'text/html'); return res.end('<!doctype html><title>mock downloader</title><h1>Mock downloader</h1>') }
   const cookie = /sessionid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
@@ -42,7 +98,7 @@ async function until(fn, ms = 20000, what = 'condition') {
 }
 async function launch() {
   proc = spawn(electron, ['.', `--remote-debugging-port=${PORT}`], {
-    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_DOWNLOADER_URL: base + '/dl' }, stdio: 'ignore'
+    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_DOWNLOADER_URL: base + '/dl', STACKTOK_EXPORT_PATH: path.join(userData, 'export.html') }, stdio: 'ignore'
   })
   const target = await until(async () => {
     const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
@@ -81,6 +137,25 @@ async function shot(name) {
   await sleep(500)
   const r = await cdp('Page.captureScreenshot', { format: 'png' })
   fs.mkdirSync(shots, { recursive: true }); fs.writeFileSync(path.join(shots, name + '.png'), Buffer.from(r.result.data, 'base64'))
+}
+let bid = 0
+async function setWindowState(state) {
+  try {
+    const v = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json()
+    const app = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).find((t) => t.type === 'page' && t.title === 'StackTok')
+    const bws = new WebSocket(v.webSocketDebuggerUrl)
+    await new Promise((r) => (bws.onopen = r))
+    const send = (method, params) => new Promise((res) => {
+      const id = ++bid
+      const h = (e) => { const m = JSON.parse(e.data); if (m.id === id) { bws.removeEventListener('message', h); res(m) } }
+      bws.addEventListener('message', h)
+      bws.send(JSON.stringify({ id, method, params }))
+    })
+    const w = await send('Browser.getWindowForTarget', { targetId: app.id })
+    const r = await send('Browser.setWindowBounds', { windowId: w.result.windowId, bounds: { windowState: state } })
+    bws.close()
+    return !w.error && !r.error
+  } catch { return false }
 }
 const clickNav = (t) => evalJs(`[...document.querySelectorAll('.nav-item')].find(b => b.textContent.startsWith(${JSON.stringify(t)})).click()`)
 
@@ -171,6 +246,81 @@ try {
   check((await state()).settings.chatWallpaper === 'aurora', '9e "custom" is refused without a picked file')
   await api('settings:set', { chatOverlay: true, chatWallpaper: 'none' })
   await inView((await views()).find((t) => t.url.endsWith('/messages')), `location.href = '/'`)
+
+  // chat export: reads the open chat of the active account (history loads lazily) and writes one HTML page
+  await api('account:chats', { id: A })
+  await until(async () => { const t = (await views()).find((v) => v.url.endsWith('/messages')); return t && (await inView(t, "document.querySelectorAll('[data-e2e=dm-new-chat-item]').length")) >= 30 }, 10000, 'mock chat')
+  const exportFile = path.join(userData, 'export.html')
+  const rx = await api('chat:export')
+  const html = fs.existsSync(exportFile) ? fs.readFileSync(exportFile, 'utf8') : ''
+  if (process.env.E2E_KEEP_EXPORT) fs.copyFileSync(exportFile, process.env.E2E_KEEP_EXPORT)
+  const count = (re) => (html.match(re) ?? []).length
+  check(rx && rx.messages === 95 && rx.complete === true, '13 export loads the whole lazily loaded history', JSON.stringify(rx))
+  check(count(/<article class="msg /g) === 95 && html.indexOf('Сообщение №0') > 0 && html.indexOf('Сообщение №0') < html.indexOf('Сообщение №94'), '13b all messages are in the file, in order')
+  check(count(/class="msg me"/g) === 32 && count(/class="msg them"/g) === 63, '13c senders are told apart by side', count(/class="msg me"/g) + '/' + count(/class="msg them"/g))
+  check(count(/class="sep"/g) === 5 && html.includes('День 4') && html.includes('12:07'), '13d date separators and times are kept')
+  check(html.includes('Тест Собеседник') && html.includes('https://www.tiktok.com/@x/video/3') && count(/class="vcard"/g) === 6, '13e partner, shared videos and their links are kept')
+  check(count(/class="media sticker/g) >= 9 && html.includes('data:image/png;base64'), '13f stickers are embedded in the file')
+  check(!html.includes('<script>alert(1)') && html.includes('&lt;script&gt;alert(1)'), '13g message text is escaped')
+  check(!/<script[^>]+src=|<link/.test(html), '13h the file loads nothing from outside')
+  // ----- speed and background -----
+  const chatTab = async () => (await views()).find((v) => v.url.includes('/messages'))
+  const openChat = async (qs, min) => {
+    await inView(await chatTab(), `location.href = '/messages${qs}'`)
+    await until(async () => { const t = await chatTab(); return t && t.url.endsWith(qs) && (await inView(t, "document.querySelectorAll('[data-e2e=dm-new-chat-item]').length")) >= min }, 15000, 'chat ' + qs)
+  }
+  const readExport = () => fs.readFileSync(exportFile, 'utf8')
+  const texts = (h) => [...h.matchAll(/<div class="text">Сообщение №(\d+)<\/div>/g)].map((m) => +m[1])
+  const plain = (n) => Array.from({ length: n }, (_, i) => i).filter((i) => i % 10 !== 5 && i % 17 !== 3 && i !== 7)
+  const inOrder = (got, want) => got.length === want.length && got.every((v, i) => v === want[i])
+
+  // 14: the export keeps going when the user leaves the page and even when the window is minimized
+  await openChat('?n=300&page=30&d=400', 30)
+  const running = api('chat:export')
+  await sleep(900)
+  await clickNav('Аккаунты') // the web view leaves the window; the export must keep it alive
+  await sleep(300)
+  const minimized = await setWindowState('minimized')
+  const ry = await running
+  if (minimized) await setWindowState('normal')
+  const h14 = readExport()
+  check(ry && ry.messages === 300 && ry.complete === true && inOrder(texts(h14), plain(300)), '14 export runs in the background (another page open' + (minimized ? ', window minimized' : '; minimizing was not available') + ')', JSON.stringify(ry))
+  await clickNav('Обзор'); await sleep(300)
+
+  // 15: a big chat is loaded and saved completely, in order, without duplicates
+  await openChat('?n=4000&page=100&d=60', 100)
+  const t15 = Date.now()
+  const phases = []
+  const watch = setInterval(async () => { try { const p = (await state()).chatExport; const k = p ? p.phase : 'idle'; if (phases.at(-1)?.[0] !== k) phases.push([k, Date.now() - t15]) } catch {} }, 80)
+  const r15 = await api('chat:export')
+  clearInterval(watch)
+  const ms15 = Date.now() - t15
+  console.log('     phases (ms from start):', JSON.stringify(phases))
+  const h15 = readExport()
+  check(r15 && r15.messages === 4000 && r15.complete === true && inOrder(texts(h15), plain(4000)), '15 a 4000-message chat is saved completely and in order', JSON.stringify(r15))
+  check(ms15 < 60000, `15b speed: ${Math.round(4000 / (ms15 / 1000))} messages/s (${ms15} ms for 4000 messages in 40 loads of 60 ms)`, ms15 + ' ms')
+
+  // 16: a list that draws only a window of its messages is walked and joined without gaps or repeats
+  await openChat('?n=700&virt=1', 1)
+  const r16 = await api('chat:export')
+  const h16 = readExport()
+  const all700 = Array.from({ length: 700 }, (_, i) => i)
+  const nums16 = [...h16.matchAll(/Сообщение №(\d+)</g)].map((m) => +m[1])
+  check(r16 && r16.messages === 700 && r16.complete === true && inOrder(nums16, all700.filter((i) => i % 10 !== 5 && i % 17 !== 3 && i !== 7)), '16 a windowed (virtualized) list is saved completely', JSON.stringify(r16) + ' got ' + nums16.length)
+
+  // 17: big pictures go to a folder next to the page instead of being dropped
+  await openChat('?n=120&page=30&d=50&big=7', 30)
+  const r17 = await api('chat:export')
+  const h17 = readExport()
+  const folder = path.join(userData, 'export_files')
+  const saved17 = fs.existsSync(folder) ? fs.readdirSync(folder) : []
+  check(r17 && r17.messages === 120 && saved17.length >= 1 && fs.statSync(path.join(folder, saved17[0])).size > 2 * 1024 * 1024 && h17.includes('export_files/') && h17.includes('лежат в папке'), '17 files too big for the page are saved next to it', JSON.stringify(r17) + ' ' + saved17.join(','))
+
+  await inView(await chatTab(), "location.href = '/'")
+  await until(async () => (await views()).every((t) => !t.url.includes('/messages')), 8000, 'left chat')
+  let noChat = false
+  try { await api('chat:export') } catch (e) { noChat = e.message.includes('Откройте диалог') }
+  check(noChat, '13i export asks for an open chat instead of writing an empty file')
 
   await api('account:rename', { id: C, label: 'Мемы 2' })
   await api('settings:set', { theme: 'light', accent: 'pink', background: 'sunset', glass: 80, restoreLast: false })

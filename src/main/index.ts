@@ -1,8 +1,11 @@
-import { BrowserWindow, app, ipcMain, nativeTheme, shell } from 'electron'
+import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
+import { writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
+import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
 import { Browse, HOME_URL, configureSession, sessionState, startUrl } from './browse'
+import { ChatDump, renderChatHtml } from './chat-export-html'
+import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
 import { Downloader } from './downloader'
 import { Store } from './store'
@@ -18,6 +21,7 @@ let browse: Browse
 let overlay: ChatOverlay
 let downloader: Downloader
 let notice: { id: number; text: string } | null = null // one-off message for the UI, shown as a toast
+let chatExport: { progress: ChatExportProgress; cancelled: boolean } | null = null // the running chat export, if any
 
 // ---------- validation ----------
 const isStr = (v: unknown, max = 500): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -43,7 +47,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -194,6 +198,53 @@ const handlers: Record<string, Handler> = {
     store.data.settings.chatWallpaper = 'none'
     store.save(); push()
   },
+  // The user asked for this export: reads the chat that is open in the active account's view and writes one HTML file where they choose.
+  'chat:export': async () => {
+    need(!chatExport, 'Экспорт уже идёт.')
+    const acc = account(store.data.activeAccountId)
+    const target = browse.chatTarget(acc.id)
+    if (!target) throw new Error('Откройте чат этого аккаунта на вкладке «Обзор».')
+    const info = await chatInfo(target.wc)
+    const stamp = new Date().toISOString().slice(0, 10)
+    const base = `TikTok-чат-${(info.name || info.handle || 'диалог').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim().slice(0, 60)}-${stamp}.html`
+    const devPath = DEV ? process.env.STACKTOK_EXPORT_PATH : undefined
+    const path = devPath || (await dialog.showSaveDialog(win, { title: 'Экспорт чата', defaultPath: join(app.getPath('downloads'), base), filters: [{ name: 'HTML-страница', extensions: ['html'] }] })).filePath
+    if (!path) return null
+    const job = { progress: { phase: 'loading', done: 0 } as ChatExportProgress, cancelled: false }
+    chatExport = job
+    let lastPush = 0
+    const ctl = {
+      cancelled: () => job.cancelled,
+      progress: (p: ChatExportProgress) => { // media finish by the thousand: the UI needs a few updates a second, not one per file
+        const now = Date.now()
+        const changed = p.phase !== job.progress.phase
+        job.progress = p
+        if (changed || now - lastPush >= 120) { lastPush = now; push() }
+      }
+    }
+    target.hold()
+    push()
+    try {
+      const got = await collectChat(target.wc, ctl)
+      const dump: ChatDump = {
+        ...got, exportedAt: Date.now(), appVersion: app.getVersion(),
+        owner: { name: acc.label, handle: acc.username, avatar: acc.avatar ? { kind: 'image', src: acc.avatar } : undefined }
+      }
+      const folder = `${basename(path).replace(/\.html?$/i, '')}_files`
+      const media = await embedMedia(dump, target.ses, ctl, { dir: join(dirname(path), folder), folder, devOrigin: DEV ? new URL(HOME_URL).origin : undefined })
+      if (media.files) dump.filesFolder = folder
+      if (media.failed) dump.warnings.push(`Не удалось сохранить вложений: ${media.failed}. В файле на их месте стоят пометки и исходные ссылки.`)
+      ctl.progress({ phase: 'saving', done: 0 })
+      await writeFile(path, renderChatHtml(dump), 'utf8')
+      if (!devPath) shell.showItemInFolder(path)
+      return { path, messages: dump.entries.filter((e) => !('sep' in e)).length, complete: dump.complete, warnings: dump.warnings }
+    } finally {
+      target.release()
+      chatExport = null
+      push()
+    }
+  },
+  'chat:exportCancel': () => { if (chatExport) chatExport.cancelled = true },
   'data:open': () => shell.openPath(app.getPath('userData'))
 }
 

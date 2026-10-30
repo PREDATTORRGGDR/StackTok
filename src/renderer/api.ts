@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { AccountView, Settings } from '@shared/types'
+import { AccountView, ChatExportProgress, Settings } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
   settings: Settings
   notice: { id: number; text: string } | null
+  chatExport: ChatExportProgress | null
   activeAccountId?: string
   version: string
   dataPath: string

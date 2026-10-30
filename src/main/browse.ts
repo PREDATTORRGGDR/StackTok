@@ -51,6 +51,8 @@ export class Browse {
   private views = new Map<string, WebContentsView>()
   private current?: string
   private bounds: Bounds | null = null
+  private lastBounds: Bounds | null = null
+  private parked = new Set<string>() // views kept alive off-screen while a chat export runs in them
 
   private userMuted = new Map<string, boolean>() // what the user chose per account
 
@@ -96,15 +98,21 @@ export class Browse {
 
   setBounds(b: Bounds | null) {
     this.bounds = b
+    if (b) this.lastBounds = b
     this.layout()
   }
 
   private detach(id: string) {
     const v = this.views.get(id)
     if (!v) return
+    v.webContents.setAudioMuted(true)
+    if (this.parked.has(id)) { // an exporting page must keep drawing frames, so it stays attached, just out of sight
+      this.win.contentView.addChildView(v)
+      v.setBounds({ x: -30000, y: 0, width: this.lastBounds?.width ?? 900, height: this.lastBounds?.height ?? 600 })
+      return
+    }
     this.win.contentView.removeChildView(v)
     // A hidden view must never keep playing: silence it and pause any video.
-    v.webContents.setAudioMuted(true)
     v.webContents.executeJavaScript("document.querySelectorAll('video, audio').forEach((m) => m.pause())").catch(() => {})
   }
 
@@ -143,6 +151,24 @@ export class Browse {
     else if (action === 'home' && this.current) wc.loadURL(startUrl(this.openIn(this.current)))
   }
 
+  /** The account's existing view for a chat export; `visible` is true only while that view is on screen. */
+  chatTarget(accountId: string) {
+    const wc = this.views.get(accountId)?.webContents
+    if (!wc || wc.isDestroyed()) return
+    return {
+      wc, ses: wc.session,
+      // While held the page is never throttled and stays attached, so it keeps drawing and the export runs on when the user
+      // switches pages or accounts, covers or minimizes the window (a detached page draws nothing, so it is parked off-screen instead).
+      hold: () => { this.parked.add(accountId); wc.setBackgroundThrottling(false); if (this.current !== accountId || !this.bounds) this.detach(accountId) },
+      release: () => {
+        this.parked.delete(accountId)
+        if (wc.isDestroyed()) return
+        wc.setBackgroundThrottling(true)
+        if (this.current !== accountId || !this.bounds) this.detach(accountId)
+      }
+    }
+  }
+
   openExternal() {
     const url = this.current && this.views.get(this.current)?.webContents.getURL()
     shell.openExternal(url && isHttp(url) ? url : HOME_URL)
@@ -173,6 +199,7 @@ export class Browse {
   destroy(accountId: string) {
     const v = this.views.get(accountId)
     if (!v) return
+    this.parked.delete(accountId) // a destroyed view must really leave the window
     this.detach(accountId)
     v.webContents.close()
     this.views.delete(accountId)

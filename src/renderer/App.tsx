@@ -3,7 +3,7 @@ import { Download, Globe, Layers, Plus, Settings as Cog, Users } from 'lucide-re
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
 import { Accounts } from './pages/Accounts'
-import { Browse } from './pages/Browse'
+import { Browse, progressText } from './pages/Browse'
 import { DownloaderPage } from './pages/Downloader'
 import { SettingsPage } from './pages/Settings'
 import { Avatar } from './ui'
@@ -95,13 +95,16 @@ export function App() {
           <header className="glass header">
             <h1>{TITLES[page]}</h1>
             <span className="sp" />
+            {s.chatExport && page !== 'browse' && (
+              <div className="chip-acct"><span>{progressText(s.chatExport)}</span><button className="btn sm" onClick={() => call('chat:exportCancel')}>Отмена</button></div>
+            )}
             {active && (
               <div className="chip-acct"><Avatar a={active} size={26} /><span>{active.label}</span><span className={'dot ' + (active.session === 'logged_in' ? 'ok' : 'warn')} /></div>
             )}
           </header>
           <div className={'content' + (page === 'browse' || page === 'downloader' ? ' frame-wrap' : '')}>
             {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={setDialog} />}
-            {page === 'browse' && <Browse active={active} go={setPage} openDialog={setDialog} />}
+            {page === 'browse' && <Browse active={active} go={setPage} openDialog={setDialog} exporting={s.chatExport} />}
             {page === 'downloader' && <DownloaderPage />}
             {page === 'settings' && <SettingsPage s={s} />}
           </div>
