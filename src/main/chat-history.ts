@@ -1,4 +1,4 @@
-import { Field, HistoryPage, ImMessage, decode, parseMessage } from './chat-api'
+import { Field, HistoryPage, ImMessage, asStr, decode, get, parseMessage } from './chat-api'
 import { ExportEntry, ExportMedia, ExportMessage } from './chat-export-html'
 
 /** TikTok said stop (rate limit, check): nothing is retried and the pull is given up. */
@@ -204,8 +204,12 @@ export function textOf(m: ImMessage): string {
   } catch { return m.content }
 }
 
-/** Markers the page never draws (type 1805 holds a single `hack` value). */
-export const isHidden = (m: ImMessage) => m.type === 1805n
+/** Markers the page never draws: content that is a single `hack` value (types 1805, 1813). */
+export const isHidden = (m: ImMessage) => {
+  if (m.type === 1805n) return true
+  const j = objectOf(m.content)
+  return !!j && Object.keys(j).length === 1 && 'hack' in j
+}
 
 const PICTURE = /cover|thumb|image|img|pic|sticker|emoji|emote|gif/i
 const NOT_PICTURE = /avatar|icon|head|author|music|sound|play|download/i
@@ -224,22 +228,67 @@ const strict = new TextDecoder('utf-8', { fatal: true })
 function describe(f: Field, depth = 0): unknown {
   if (typeof f.v === 'bigint') return f.v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(f.v) : String(f.v)
   try { const s = strict.decode(f.v); if (s && /^[\x20-\x7e -￿\n\t]*$/.test(s)) return s.slice(0, 400) } catch { /* not text */ }
-  if (depth < 2) {
+  if (depth < 4) {
     try {
       const inner = decode(f.v)
-      if (inner.length) return Object.fromEntries(inner.map((x) => [x.no, describe(x, depth + 1)]))
+      if (inner.length) {
+        const out: Record<number, unknown> = {}
+        for (const x of inner) { const v = describe(x, depth + 1); out[x.no] = x.no in out ? [...(Array.isArray(out[x.no]) ? (out[x.no] as unknown[]) : [out[x.no]]), v] : v } // repeated fields stay together
+        return out
+      }
     } catch { /* not a message either */ }
   }
   return `bytes(${f.v.length})`
+}
+
+const EMOJI: Record<string, string> = { love: '❤️' }
+
+/** Reactions sit on the message as repeated field 15: a key like `e:love` and who reacted (ids deep inside the value). */
+function reactionsOf(m: ImMessage, own?: string): string[] {
+  const ids = m.conversationId.split(':').slice(2)
+  const out: string[] = []
+  for (const f of m.other) {
+    if (f.no !== 15 || typeof f.v === 'bigint') continue
+    let inner: Field[]
+    try { inner = decode(f.v) } catch { continue }
+    const key = asStr(get(inner, 1)).replace(/^e:/, '')
+    if (!key) continue
+    const seen = new Set<string>()
+    const walk = (fs: Field[], d: number) => {
+      for (const x of fs) {
+        if (typeof x.v === 'bigint') seen.add(String(x.v))
+        else if (d < 4) { try { walk(decode(x.v), d + 1) } catch { /* not a message */ } }
+      }
+    }
+    const rest = inner.filter((x) => x.no !== 1)
+    walk(rest, 0)
+    const who = ids.find((id) => seen.has(id))
+    out.push((EMOJI[key] ?? key) + (who && own ? (who === own ? ' · вы' : ' · собеседник') : ''))
+  }
+  return out
+}
+
+/** A system notice: text with {{1}}-style slots and the list that names them. */
+function noticeText(json: Json): { text: string; item?: string } {
+  const parts = [json.tips, json.template, json.fallback_tips]
+  const names = parts.find(Array.isArray) as { key?: unknown; name?: unknown; extra?: { item_id?: unknown } }[] | undefined
+  const text = parts.find((p) => typeof p === 'string' && p) as string | undefined
+  const filled = (text ?? '').replace(/\{\{(\d+)\}\}/g, (_, n: string) => str(names?.find((x) => String(x.key) === n)?.name) || '…')
+  const item = names?.map((x) => str(x.extra?.item_id)).find(Boolean)
+  return { text: filled, item }
 }
 
 function entryOf(m: ImMessage, ctx: EntryContext): ExportMessage {
   const json = objectOf(m.content)
   const kind = Number(m.type)
   const system = kind === 1
-  let text = json ? (system ? str(json.template) : str(json.text)) : m.content
+  const notice = json && system ? noticeText(json) : undefined
+  const recalled = m.ext['s:is_recalled'] === '1'
+  const card = !!json && !!str(json.uid) && !!str(json.name) && !!json.avatar && !str(json.itemId) // a shared profile
+  const text = recalled ? 'Сообщение удалено' : notice ? notice.text : card ? `Профиль: ${str(json?.name)}${str(json?.desc) ? ` (@${str(json?.desc)})` : ''}` : json ? str(json.text) : m.content
   const pics = json ? picturesOf(json) : []
-  const itemId = json ? (kind === 40 ? str(json.aweme_id) : str(json.itemId) || str(json.item_id) || str(json.aweme_id) || str(json.itemID)) : ''
+  if (card) { const a = urlsIn(json?.avatar).find((u) => !/heic/i.test(u.url)); if (a) pics.push({ key: 'image', url: a.url }) }
+  const itemId = notice ? notice.item ?? '' : json ? (kind === 40 ? str(json.aweme_id) : str(json.itemId) || str(json.item_id) || str(json.aweme_id) || str(json.itemID)) : ''
   const cover = itemId ? pics.find((p) => /cover/i.test(p.key)) ?? pics.find((p) => /thumb/i.test(p.key)) : undefined
   const title = json ? (kind === 40 ? [str(json.author_name) && `Комментарий ${str(json.author_name)}`, str(json.comment)].filter(Boolean).join(': ') : str(json.content_title) || str(json.title) || str(json.desc) || str(json.description) || str(json.content_name)) : ''
   const video = itemId
@@ -256,7 +305,8 @@ function entryOf(m: ImMessage, ctx: EntryContext): ExportMessage {
   const when = new Date(toMs(m.time))
   const plain = !json || Object.keys(json).every((k) => k === 'text' || k === 'aweType' || k === 'tux_text')
   const ext = Object.entries(m.ext).filter(([k]) => !BORING_EXT.test(k))
-  const extra = m.other.filter((f) => !STRUCTURAL.has(f.no))
+  const reactions = reactionsOf(m, ctx.own)
+  const extra = m.other.filter((f) => !STRUCTURAL.has(f.no) && f.no !== 23 && !(f.no === 15 && reactions.length))
   const raw = plain && !ext.length && !extra.length ? '' : JSON.stringify({
     content: json ?? m.content,
     ext: ext.length ? Object.fromEntries(ext) : undefined,
@@ -266,7 +316,7 @@ function entryOf(m: ImMessage, ctx: EntryContext): ExportMessage {
   return {
     side, author: system ? 'TikTok' : undefined, time: clock(when), text,
     links: [...text.matchAll(/https?:\/\/[^\s<>"']+/g)].map((x) => ({ href: x[0], text: '' })),
-    media, video, reactions: [], rawText: raw,
+    media, video, reactions, rawText: raw,
     outline: `api · тип ${m.type}${aweType}` + (extra.length ? ` · поля ${[...new Set(extra.map((f) => f.no))].join(',')}` : '')
   }
 }

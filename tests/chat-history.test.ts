@@ -224,11 +224,33 @@ describe('toEntries', () => {
     const boring = { 's:mode': '0', 'im_callback_status_code': '0', 's:client_message_id': 'x', source_aid: '1988', 'a:entrance_type': '1' }
     const [plain] = msgs(toEntries([m(1, 11, '{"aweType":700,"text":"hi"}', { ext: boring, other: [vint(2, 1), vint(12, 7), vint(14, 0)] })], { own: '11' }))
     expect(plain.rawText).toBe('')
-    const [odd] = msgs(toEntries([m(2, 11, '{"aweType":1234,"foo":"bar"}', { ext: { ...boring, new_key: 'v' }, other: [text(18, 'hello'), vint(23, 5)] })], { own: '11' }))
+    const [odd] = msgs(toEntries([m(2, 11, '{"aweType":1234,"foo":"bar"}', { ext: { ...boring, new_key: 'v' }, other: [text(18, 'hello'), vint(24, 5)] })], { own: '11' }))
     expect(odd.rawText).toContain('foo')
     expect(odd.rawText).toContain('new_key')
     expect(odd.rawText).toContain('hello')
-    expect(odd.outline).toContain('18,23')
+    expect(odd.outline).toContain('18,24')
+  })
+  it('shows reactions from field 15 with who reacted, and keeps them out of the details', () => {
+    const react = (who: number) => bytes(15, encode([text(1, 'e:love'), sub(2, [sub(1, [vint(1, who), vint(2, 1700000000)])])]))
+    const c = { ...m(1, 11, '{"text":"hi"}', { other: [react(22), react(11)] }), conversationId: '0:1:11:22' }
+    const [x] = msgs(toEntries([c], { own: '11' }))
+    expect(x.reactions).toEqual(['❤️ · собеседник', '❤️ · вы'])
+    expect(x.rawText).toBe('')
+  })
+  it('fills the slots of a system notice and links the post it names', () => {
+    const n = JSON.stringify({ tips: 'Ann liked {{1}} you shared', template: [{ key: 1, name: 'the post', extra: { item_id: '7696232449176505618' } }] })
+    const [x] = msgs(toEntries([m(1, 0, n, { type: 1 })], { own: '11' }))
+    expect(x.text).toBe('Ann liked the post you shared')
+    expect(x.video?.href).toBe('https://www.tiktok.com/@/video/7696232449176505618')
+  })
+  it('shows a shared profile, a recalled message, and hides single-value markers', () => {
+    const card = JSON.stringify({ uid: '5', secUID: 'x', name: 'Bob', desc: 'bob_1', avatar: { url_list: ['https://p16.example.com/a.jpg'] } })
+    const [c] = msgs(toEntries([m(1, 11, card, { type: 25 })], { own: '11' }))
+    expect(c.text).toBe('Профиль: Bob (@bob_1)')
+    expect(c.media[0]).toMatchObject({ kind: 'image', src: 'https://p16.example.com/a.jpg' })
+    const [r] = msgs(toEntries([m(2, 22, '', { ext: { 's:is_recalled': '1' } })], { own: '11' }))
+    expect(r.text).toBe('Сообщение удалено')
+    expect(isHidden(m(3, 11, '{"hack":"1"}', { type: 1813 }))).toBe(true)
   })
   it('reads seconds, milliseconds and microseconds', () => {
     expect(toMs(1700000000n)).toBe(1700000000000)

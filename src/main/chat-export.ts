@@ -736,7 +736,8 @@ export async function embedMedia(
   const get = async (url: string): Promise<Buffer | string> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        const res = await ses.fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(300000) })
+        let res = await ses.fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(300000) })
+        if (res.status === 403) res = await ses.fetch(url, { credentials: 'include', headers: { referer: 'https://www.tiktok.com/' }, signal: AbortSignal.timeout(300000) }) // some covers want the page as referrer
         if (res.status === 429 || res.status >= 500) throw new Error('transient')
         if (!res.ok || !res.body) return `ответ ${res.status}`
         const chunks: Uint8Array[] = []
