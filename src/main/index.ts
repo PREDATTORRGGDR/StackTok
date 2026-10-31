@@ -2,7 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electro
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, GLASS_MATERIALS, HEX, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
 import { Browse, HOME_URL, configureSession, sessionState, startUrl } from './browse'
 import { ChatDump, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
@@ -47,7 +47,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, activeAccountId: d.activeAccountId, version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -66,18 +66,13 @@ function account(id: unknown) {
   return a
 }
 
-// Keeps the native window buttons readable on both themes.
-function applyOverlay() {
-  const dark = store.data.settings.theme === 'system' ? nativeTheme.shouldUseDarkColors : store.data.settings.theme === 'dark'
-  if (win && !win.isDestroyed()) win.setTitleBarOverlay({ color: '#00000000', symbolColor: dark ? '#c9cbd6' : '#2a2d3a', height: 44 })
-}
-
 // "Чистое" background: a see-through window (Windows 11 acrylic) so the glass shows the real desktop behind it.
 function applyBackground() {
   if (!win || win.isDestroyed()) return
   const clear = store.data.settings.background === 'clear'
-  win.setBackgroundMaterial(clear ? 'acrylic' : 'none')
-  win.setBackgroundColor(clear ? '#00000000' : '#0a0c16')
+  const light = store.data.settings.theme === 'light' || (store.data.settings.theme === 'system' && !nativeTheme.shouldUseDarkColors)
+  win.setBackgroundMaterial(clear ? store.data.settings.glassMaterial : 'none')
+  win.setBackgroundColor(clear ? '#00000000' : light ? '#e6ebf7' : '#0a0c16')
 }
 
 function select(id: string | undefined) {
@@ -172,7 +167,11 @@ const handlers: Record<string, Handler> = {
     const cur = store.data.settings
     if (THEMES.includes(s?.theme as any)) cur.theme = s.theme!
     if (ACCENTS.includes(s?.accent as any)) cur.accent = s.accent!
+    if (typeof s?.accentColor === 'string' && (s.accentColor === '' || HEX.test(s.accentColor))) cur.accentColor = s.accentColor.toLowerCase()
     if (BACKGROUNDS.includes(s?.background as any)) cur.background = s.background!
+    if (Array.isArray(s?.bgCustom) && s.bgCustom.length === 3 && s.bgCustom.every((c) => typeof c === 'string' && HEX.test(c))) cur.bgCustom = s.bgCustom.map((c) => c.toLowerCase()) as [string, string, string]
+    if (GLASS_MATERIALS.includes(s?.glassMaterial as any)) cur.glassMaterial = s.glassMaterial!
+    if (typeof s?.motion === 'boolean') cur.motion = s.motion
     if (typeof s?.glass === 'number' && Number.isFinite(s.glass)) cur.glass = Math.min(100, Math.max(0, Math.round(s.glass)))
     if (typeof s?.restoreLast === 'boolean') cur.restoreLast = s.restoreLast
     if (typeof s?.muteByDefault === 'boolean') cur.muteByDefault = s.muteByDefault
@@ -181,7 +180,6 @@ const handlers: Record<string, Handler> = {
     if (typeof s?.chatDim === 'number' && Number.isFinite(s.chatDim)) cur.chatDim = Math.min(100, Math.max(0, Math.round(s.chatDim)))
     if (CHAT_TEXT_SIZES.includes(s?.chatTextSize as any)) cur.chatTextSize = s.chatTextSize!
     if (CHAT_WALLPAPERS.includes(s?.chatWallpaper as any) && (s.chatWallpaper !== 'custom' || overlay.hasImage())) cur.chatWallpaper = s.chatWallpaper!
-    applyOverlay()
     applyBackground()
     overlay.refresh()
     store.save(); push()
@@ -245,6 +243,9 @@ const handlers: Record<string, Handler> = {
     }
   },
   'chat:exportCancel': () => { if (chatExport) chatExport.cancelled = true },
+  'win:min': () => win.minimize(),
+  'win:max': () => { if (win.isMaximized()) win.unmaximize(); else win.maximize() },
+  'win:close': () => win.close(),
   'data:open': () => shell.openPath(app.getPath('userData'))
 }
 
@@ -263,7 +264,6 @@ function createWindow() {
     width: 1280, height: 820, minWidth: 980, minHeight: 620,
     backgroundColor: store.data.settings.background === 'clear' ? '#00000000' : '#0a0c16', title: 'StackTok', icon: join(__dirname, '../../build/icon.png'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#00000000', symbolColor: '#c9cbd6', height: 44 },
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   })
   const wc = win.webContents
@@ -282,8 +282,10 @@ function createWindow() {
     notice = { id: (notice?.id ?? 0) + 1, text: `«${store.data.accounts.find((x) => x.id === id)?.label ?? 'Аккаунт'}»: TikTok не отдал страницу (403). Открыт Studio, попробуйте «Домой» позже.` }
     push()
   })
-  wc.once('did-finish-load', () => { browse.show(store.data.activeAccountId); applyOverlay(); applyBackground() })
-  nativeTheme.on('updated', applyOverlay)
+  wc.once('did-finish-load', () => { browse.show(store.data.activeAccountId); applyBackground(); push() })
+  nativeTheme.on('updated', applyBackground)
+  win.on('maximize', push)
+  win.on('unmaximize', push)
 }
 
 app.whenReady().then(() => {

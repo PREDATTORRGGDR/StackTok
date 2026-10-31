@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Download, Globe, Layers, Plus, Settings as Cog, Users } from 'lucide-react'
+import { Copy, Download, Globe, Layers, Minus, Plus, Settings as Cog, Square, Users, X } from 'lucide-react'
+import { ACCENT_COLORS, BG_COLORS } from '@shared/types'
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
 import { Accounts } from './pages/Accounts'
@@ -11,6 +12,20 @@ import { Avatar } from './ui'
 export type Page = 'accounts' | 'browse' | 'downloader' | 'settings'
 const TITLES: Record<Page, string> = { accounts: 'Аккаунты', browse: 'Обзор', downloader: 'Загрузчик', settings: 'Настройки' }
 
+const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+const mix = (c: number[], to: number, t: number) => c.map((v) => Math.round(v + (to - v) * t))
+const toHex = (c: number[]) => '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('')
+
+function WinControls({ maximized }: { maximized: boolean }) {
+  return (
+    <div className="winctl">
+      <button aria-label="Свернуть" title="Свернуть" onClick={() => call('win:min')}><Minus size={15} /></button>
+      <button aria-label={maximized ? 'Восстановить' : 'Развернуть'} title={maximized ? 'Восстановить' : 'Развернуть'} onClick={() => call('win:max')}>{maximized ? <Copy size={13} /> : <Square size={12} />}</button>
+      <button className="close" aria-label="Закрыть" title="Закрыть" onClick={() => call('win:close')}><X size={16} /></button>
+    </div>
+  )
+}
+
 /** Applies theme, accent, background and glass strength to the document. */
 function useAppearance(s: AppState | null) {
   const set = s?.settings
@@ -21,15 +36,22 @@ function useAppearance(s: AppState | null) {
       const light = set.theme === 'light' || (set.theme === 'system' && mq.matches)
       const root = document.documentElement
       root.dataset.theme = light ? 'light' : 'dark'
-      root.dataset.accent = set.accent
       root.dataset.bg = set.background
+      root.dataset.motion = set.motion ? 'on' : 'off'
+      const base = rgb(set.accentColor || ACCENT_COLORS[set.accent])
+      root.style.setProperty('--accent', toHex(light ? mix(base, 0, 0.12) : base))
+      root.style.setProperty('--accent-2', toHex(mix(base, 255, light ? 0.22 : 0.38)))
+      root.style.setProperty('--accent-rgb', (light ? mix(base, 0, 0.12) : base).join(', '))
+      root.style.setProperty('--on-accent', base[0] * 0.299 + base[1] * 0.587 + base[2] * 0.114 > 175 ? '#14161f' : '#fff')
+      const spots = set.background === 'custom' ? set.bgCustom : set.background === 'clear' ? null : BG_COLORS[set.background]
+      ;['--b1', '--b2', '--b3'].forEach((v, i) => spots ? root.style.setProperty(v, spots[i]) : root.style.removeProperty(v))
       root.style.setProperty('--blur', 10 + set.glass * 0.4 + 'px')
-      root.style.setProperty('--fill', String((set.background === 'clear' ? (light ? 0.3 : 0.2) + set.glass * 0.003 : light ? 0.22 + set.glass * 0.004 : 0.035 + set.glass * 0.0012).toFixed(3)))
+      root.style.setProperty('--fill', String((set.background === 'clear' ? (light ? 0.4 : 0.2) + set.glass * 0.003 : light ? 0.42 + set.glass * 0.0035 : 0.035 + set.glass * 0.0012).toFixed(3)))
     }
     apply()
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
-  }, [set?.theme, set?.accent, set?.background, set?.glass])
+  }, [set?.theme, set?.accent, set?.accentColor, set?.background, set?.bgCustom.join(), set?.motion, set?.glass])
 }
 
 export function App() {
@@ -101,6 +123,7 @@ export function App() {
             {active && (
               <div className="chip-acct"><Avatar a={active} size={26} /><span>{active.label}</span><span className={'dot ' + (active.session === 'logged_in' ? 'ok' : 'warn')} /></div>
             )}
+            <WinControls maximized={s.maximized} />
           </header>
           <div className={'content' + (page === 'browse' || page === 'downloader' ? ' frame-wrap' : '')}>
             {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={setDialog} />}

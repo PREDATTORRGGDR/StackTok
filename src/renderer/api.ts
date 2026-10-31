@@ -7,6 +7,7 @@ export interface AppState {
   notice: { id: number; text: string } | null
   chatExport: ChatExportProgress | null
   activeAccountId?: string
+  maximized: boolean
   version: string
   dataPath: string
 }

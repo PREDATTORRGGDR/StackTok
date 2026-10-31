@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ACCENTS, BACKGROUNDS, CHAT_TEXT_SIZES, OPEN_IN, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
+import { ACCENTS, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', background: 'aurora', glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal' }
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'aurora', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal' }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+const hex = (v: unknown, d: string): string => (typeof v === 'string' && HEX.test(v) ? v.toLowerCase() : d)
 const pick = <T extends string>(v: unknown, list: readonly T[], d: T): T => (list.includes(v as T) ? (v as T) : d)
 
 /** Validates loaded JSON; drops malformed records instead of crashing. */
@@ -29,7 +30,11 @@ export function sanitize(raw: any): Data {
     settings: {
       theme: pick(s.theme, THEMES, DEFAULT_SETTINGS.theme),
       accent: pick(s.accent, ACCENTS, DEFAULT_SETTINGS.accent),
+      accentColor: hex(s.accentColor, '') ,
       background: pick(s.background, BACKGROUNDS, DEFAULT_SETTINGS.background),
+      bgCustom: Array.isArray(s.bgCustom) && s.bgCustom.length === 3 ? (s.bgCustom.map((c: unknown, i: number) => hex(c, DEFAULT_SETTINGS.bgCustom[i])) as [string, string, string]) : DEFAULT_SETTINGS.bgCustom,
+      glassMaterial: pick(s.glassMaterial, GLASS_MATERIALS, DEFAULT_SETTINGS.glassMaterial),
+      motion: s.motion !== false,
       glass: Math.min(100, Math.max(0, num(s.glass) ?? DEFAULT_SETTINGS.glass)),
       restoreLast: s.restoreLast !== false,
       muteByDefault: s.muteByDefault !== false,
