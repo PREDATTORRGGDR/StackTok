@@ -151,6 +151,17 @@ export class Browse {
     else if (action === 'home' && this.current) wc.loadURL(startUrl(this.openIn(this.current)))
   }
 
+  /** The address the account's view shows now, or '' when it has no view yet. */
+  url(accountId: string): string {
+    const wc = this.views.get(accountId)?.webContents
+    return wc && !wc.isDestroyed() ? wc.getURL() : ''
+  }
+
+  /** The account's view (created on demand); repost cleanup sends its requests from this page. */
+  contents(accountId: string): Electron.WebContents {
+    return this.view(accountId).webContents
+  }
+
   /** The account's existing view for a chat export; `visible` is true only while that view is on screen. */
   chatTarget(accountId: string) {
     const wc = this.views.get(accountId)?.webContents

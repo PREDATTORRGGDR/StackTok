@@ -72,7 +72,56 @@ if (P.has('virt')) {
   })
 }
 </script>`
+// Reposts per session: 130 videos, positions 40..99 are "unavailable" (TikTok lists them as empty pages but moves the cursor).
+const reposts = new Map()
+const repostsOf = (id) => { if (!reposts.has(id)) reposts.set(id, Array.from({ length: 130 }, (_, i) => ({ id: String(7_400_000_000 + i), hidden: i >= 40 && i < 100 }))); return reposts.get(id) }
+const repostHits = { list: 0, del: 0, cookies: new Set() }
+const modelHits = { vision: 0, synth: 0, images: 0, auth: new Set() }
 const server = http.createServer((req, res) => {
+  if (req.url === '/v1/chat/completions' && req.method === 'POST') { // a fake OpenAI-style model for the repost portrait
+    let raw = ''
+    req.on('data', (c) => (raw += c))
+    req.on('end', () => {
+      modelHits.auth.add(req.headers.authorization)
+      const b = JSON.parse(raw), parts = b.messages[1].content
+      res.setHeader('content-type', 'application/json')
+      const answer = (t) => res.end(JSON.stringify({ choices: [{ message: { content: t } }], usage: { prompt_tokens: 120, completion_tokens: 60 } }))
+      if (String(b.messages[0].content).includes('размечаешь')) {
+        modelHits.vision++
+        modelHits.images += parts.filter((p) => p.type === 'image_url' && p.image_url.url.startsWith('data:image/jpeg;base64,')).length
+        return answer(JSON.stringify(parts.filter((p) => p.type === 'text').map((p) => ({ i: +/^Видео (\d+)/.exec(p.text)[1], ocr: 'надпись', topic: 'тема', tone: 'спокойно', kind: 'мем', note: 'видно' }))))
+      }
+      modelHits.synth++
+      answer(JSON.stringify({ title: 'Тестовый портрет', archetype: { name: 'Наблюдатель', tagline: 'т', description: 'д' }, summary: 'с', traits: [{ name: 'Открытость', score: 70, why: 'в' }], evidence: [{ i: 1, quote: 'надпись', meaning: 'м' }] }))
+    })
+    return
+  }
+  const sid = /sessionid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
+  if (req.url.startsWith('/api/repost/item_list/')) {
+    repostHits.list++; repostHits.cookies.add(sid)
+    const q = new URL(req.url, 'http://x').searchParams, at = +q.get('cursor'), n = +q.get('count'), all = repostsOf(sid)
+    res.setHeader('content-type', 'application/json')
+    if (q.get('secUid') !== 'sec_' + sid) return res.end(JSON.stringify({ status_code: 10101, status_msg: 'bad secUid' }))
+    return res.end(JSON.stringify({ status_code: 0, itemList: all.slice(at, at + n).filter((x) => !x.hidden).map((x, k) => ({ id: x.id, desc: 'видео #тег' + (k % 3), createTime: 1_700_000_000 + k * 86400, author: { uniqueId: 'au' + (k % 4) }, video: { cover: base + '/img/c' + x.id + '.png' } })), hasMore: at + n < all.length, cursor: String(at + n) }))
+  }
+  if (req.url.startsWith('/api/user/detail/')) { // public profile lookup for the portrait of any profile
+    const name = new URL(req.url, 'http://x').searchParams.get('uniqueId')
+    res.setHeader('content-type', 'application/json')
+    if (name === 'nobody') return res.end(JSON.stringify({ statusCode: 10221, userInfo: {} }))
+    return res.end(JSON.stringify({ statusCode: 0, userInfo: { user: { uniqueId: name, secUid: 'sec_' + sid, privateAccount: name === 'private_one' } } }))
+  }
+  if (req.url.startsWith('/passport/web/account/info/')) { // TikTok's own account JSON, the first identity source of the repost cleanup
+    res.setHeader('content-type', 'application/json')
+    return res.end(JSON.stringify(sid ? { message: 'success', data: { username: 'user_' + sid, sec_user_id: 'sec_' + sid } } : { message: 'error', data: { name: 'session_expired' } }))
+  }
+  if (req.url.startsWith('/tiktok/v1/upvote/delete')) {
+    repostHits.del++; repostHits.cookies.add(sid)
+    const id = new URL(req.url, 'http://x').searchParams.get('item_id'), all = repostsOf(sid), i = all.findIndex((x) => x.id === id)
+    if (req.method !== 'POST') { res.statusCode = 405; return res.end() }
+    if (i >= 0) all.splice(i, 1)
+    res.setHeader('content-type', 'application/json')
+    return res.end(JSON.stringify(+id % 7 ? { status_code: 0, delete_result: { delete_video_status: 1, sync_delete_video: true } } : { status_code: 0 }))
+  }
   if (req.url.startsWith('/img/')) { res.setHeader('content-type', 'image/png'); return res.end(req.url.startsWith('/img/big') ? BIG : PNG) }
   if (req.url.startsWith('/messages')) { res.setHeader('content-type', 'text/html'); return res.end(chatPage) }
   if (req.url.startsWith('/profile')) { res.statusCode = 403; return res.end('forbidden') } // like TikTok sometimes does
@@ -82,7 +131,8 @@ const server = http.createServer((req, res) => {
   if (!id) { id = 's' + ++counter; res.setHeader('set-cookie', `sessionid=${id}; Max-Age=86400; Path=/`) }
   seenHome.push({ had: cookie, id })
   res.setHeader('content-type', 'text/html')
-  res.end(`<!doctype html><body style="font-family:sans-serif;background:#1b1d2a;color:#fff"><div data-e2e="nav-profile"><a href="/@user_${id}">me</a></div><h1>Mock TikTok</h1>`)
+  const rehydrate = JSON.stringify({ __DEFAULT_SCOPE__: { 'webapp.app-context': { user: { uniqueId: 'user_' + id, secUid: 'sec_' + id } } } })
+  res.end(`<!doctype html><script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${rehydrate}</script><body style="font-family:sans-serif;background:#1b1d2a;color:#fff"><div data-e2e="nav-profile"><a href="/@user_${id}">me</a></div><h1>Mock TikTok</h1>`)
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${server.address().port}`
@@ -97,8 +147,8 @@ async function until(fn, ms = 20000, what = 'condition') {
   throw new Error('timeout waiting for ' + what)
 }
 async function launch() {
-  proc = spawn(electron, ['.', `--remote-debugging-port=${PORT}`], {
-    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_DOWNLOADER_URL: base + '/dl', STACKTOK_EXPORT_PATH: path.join(userData, 'export.html') }, stdio: 'ignore'
+  proc = spawn(electron, ['.', `--remote-debugging-port=${PORT}`, '--disable-features=CalculateNativeWinOcclusion', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'], {
+    cwd: root, env: { ...process.env, STACKTOK_USER_DATA: userData, STACKTOK_HOME_URL: base + '/', STACKTOK_DOWNLOADER_URL: base + '/dl', STACKTOK_EXPORT_PATH: path.join(userData, 'export.html'), STACKTOK_PSY_PATH: path.join(userData, 'psy.html') }, stdio: 'ignore'
   })
   const target = await until(async () => {
     const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
@@ -226,7 +276,17 @@ try {
     w.close()
     return out.result?.result?.value
   }
-  const wall = (t) => inView(t, `getComputedStyle(document.documentElement, '::before').content`)
+  // 11c: toolbar shortcuts open Studio, profile or messages of the account
+  const before11 = (await state()).activeAccountId
+  await api('account:page', { id: B, value: 'chats' })
+  await until(async () => (await views()).some((t) => t.url.endsWith('/messages')), 8000, 'messages via toolbar')
+  await api('account:page', { id: B, value: 'studio' })
+  await until(async () => (await views()).every((t) => !t.url.endsWith('/messages')), 8000, 'studio via toolbar')
+  let bad11 = false
+  try { await api('account:page', { id: B, value: 'settings' }) } catch { bad11 = true }
+  check(bad11, '11c toolbar opens Studio and messages, unknown pages are refused')
+  if (before11) await api('account:select', { id: before11 })
+  const wall =(t) => inView(t, `getComputedStyle(document.documentElement, '::before').content`)
   await api('settings:set', { chatOverlay: true, chatWallpaper: 'aurora' })
   const [v1, v2] = await views()
   await inView(v1, `location.href = '/messages'`)
@@ -321,6 +381,71 @@ try {
   let noChat = false
   try { await api('chat:export') } catch (e) { noChat = e.message.includes('Откройте диалог') }
   check(noChat, '13i export asks for an open chat instead of writing an empty file')
+
+  // 19: the portrait: reposts → covers → a (fake) model → a presentation; the key stays in main, encrypted
+  s = await state()
+  const acctP = s.activeAccountId
+  let noKey = false
+  try { await api('psy:start', { id: acctP }) } catch (e) { noKey = e.message.includes('ключ') }
+  await api('settings:set', { psyPreset: 'custom', psyBase: base + '/v1' })
+  await api('psy:key', { key: 'test-key-123' })
+  s = await state()
+  const keyFile = fs.readFileSync(path.join(userData, 'psy-key.bin'))
+  check(noKey && s.hasPsyKey === true && !JSON.stringify(s).includes('test-key-123') && !keyFile.includes('test-key-123'), '19 the API key is required, kept encrypted in main and never sent to the UI')
+  await api('psy:start', { id: acctP, frames: false, limit: 200 })
+  const psy19 = await until(async () => { const j = (await state()).psy; return j && j.status !== 'running' && j }, 60000, 'portrait end')
+  const deck = fs.existsSync(path.join(userData, 'psy.html')) ? fs.readFileSync(path.join(userData, 'psy.html'), 'utf8') : ''
+  check(psy19.status === 'done' && modelHits.vision === 6 && modelHits.synth === 1 && modelHits.images === 70 && deck.includes('Тестовый портрет') && deck.includes('надпись') && deck.includes('data:image/jpeg;base64,'), '19b 70 reposts become 6 vision batches, one portrait and a self-contained deck', JSON.stringify(psy19) + ' ' + JSON.stringify({ ...modelHits, auth: [...modelHits.auth] }))
+  check(modelHits.auth.size === 1 && modelHits.auth.has('Bearer test-key-123') && psy19.tokens > 0, '19c the key goes only to the configured address as a Bearer header')
+  await api('psy:dismiss')
+  // 19h: the toolbar button works on the profile that is open in the view
+  const homeTab = (await views()).find((v) => !v.url.includes('/messages')) ?? (await views())[0]
+  const profileNow = () => api('browse:profile', { id: acctP })
+  const before = await profileNow()
+  await inView(homeTab, "location.href = '/@cool_user'")
+  const onProfile = await until(async () => (await profileNow()) === 'cool_user' && 'cool_user', 10000, 'profile detected')
+  await inView((await views())[0], "location.href = '/'")
+  const offProfile = await until(async () => (await profileNow()) === null && 'null', 10000, 'profile cleared')
+  check(before === null && onProfile === 'cool_user' && offProfile === 'null', '19h the open profile page is detected (and cleared on other pages)', JSON.stringify({ before, onProfile, offProfile }))
+  // 19e: any public profile by name (a link works too); closed and unknown profiles stop with a message; junk names are refused
+  await api('psy:start', { id: acctP, username: 'https://www.tiktok.com/@cool_user?lang=ru', frames: false, limit: 200 })
+  const psyOther = await until(async () => { const j = (await state()).psy; return j && j.status !== 'running' && j }, 60000, 'other profile portrait end')
+  const deck2 = fs.readFileSync(path.join(userData, 'psy.html'), 'utf8')
+  check(psyOther.status === 'done' && psyOther.target === 'cool_user' && deck2.includes('@cool_user'), '19e a portrait of any public profile by name or link', JSON.stringify(psyOther))
+  await api('psy:dismiss')
+  await api('psy:start', { id: acctP, username: '@private_one' })
+  const psyPriv = await until(async () => { const j = (await state()).psy; return j && j.status !== 'running' && j }, 30000, 'private profile end')
+  check(psyPriv.status === 'stopped' && /закрыт/.test(psyPriv.message) && modelHits.vision === 12, '19f a closed profile stops before anything goes to the model', psyPriv.message)
+  await api('psy:dismiss')
+  await api('psy:start', { id: acctP, username: '@nobody' })
+  const psyNone = await until(async () => { const j = (await state()).psy; return j && j.status !== 'running' && j }, 30000, 'unknown profile end')
+  let junk = false
+  await api('psy:dismiss')
+  try { await api('psy:start', { id: acctP, username: 'http://evil.test/@x y' }) } catch (e) { junk = e.message.includes('Не похоже') }
+  check(psyNone.status === 'stopped' && /не найден/.test(psyNone.message) && junk, '19g unknown profiles stop, junk names are refused', psyNone.message)
+  await api('psy:dismiss')
+  await api('psy:key', { key: null })
+  check((await state()).hasPsyKey === false && !fs.existsSync(path.join(userData, 'psy-key.bin')), '19d the key can be removed')
+
+  // 18: one button removes every repost the list gives, walking past empty pages, from the account's own page and cookies
+  s = await state()
+  const acctR = s.activeAccountId
+  await api('reposts:start', { id: acctR })
+  await clickNav('Аккаунты')
+  await until(async () => { const j = (await state()).job; return j && (j.phase !== 'scan' || j.status !== 'running') }, 15000, 'repost scan end')
+  await shot('reposts-running')
+  const job18 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 60000, 'repost cleanup end')
+  await shot('reposts-done')
+  const left18 = repostsOf([...repostHits.cookies][0])
+  check(job18.status === 'done' && job18.found === 70 && job18.removed === 70 && job18.failed === 0 && left18.every((x) => x.hidden), '18 all listed reposts are removed and the rescan confirms it', JSON.stringify(job18) + ' left ' + left18.length)
+  check(repostHits.cookies.size === 1 && !repostHits.cookies.has(undefined), '18b repost requests carry only the account cookie', [...repostHits.cookies].join(','))
+  let twice = false
+  await api('reposts:dismiss')
+  await api('reposts:start', { id: acctR })
+  try { await api('reposts:start', { id: acctR }) } catch (e) { twice = e.message.includes('уже идёт') }
+  const job18c = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 30000, 'second cleanup end')
+  check(twice && job18c.found === 0 && /нет/.test(job18c.message), '18c a second run finds nothing and only one cleanup runs at a time', job18c.message)
+  await api('reposts:dismiss')
 
   await api('account:rename', { id: C, label: 'Мемы 2' })
   await api('settings:set', { theme: 'light', accent: 'pink', background: 'sunset', glass: 80, restoreLast: false })

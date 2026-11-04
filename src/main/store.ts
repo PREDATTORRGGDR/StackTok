@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ACCENTS, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
+import { ACCENTS, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, PSY_PRESETS, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'aurora', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal' }
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'aurora', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal', psyPreset: 'anthropic', psyBase: '', psyVision: '', psySynth: '' }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -42,7 +42,11 @@ export function sanitize(raw: any): Data {
       chatWallpaper: pick(s.chatWallpaper, CHAT_WALLPAPERS, DEFAULT_SETTINGS.chatWallpaper),
       chatDim: Math.min(100, Math.max(0, num(s.chatDim) ?? DEFAULT_SETTINGS.chatDim)),
       chatPrivacy: s.chatPrivacy === true,
-      chatTextSize: pick(s.chatTextSize, CHAT_TEXT_SIZES, DEFAULT_SETTINGS.chatTextSize)
+      chatTextSize: pick(s.chatTextSize, CHAT_TEXT_SIZES, DEFAULT_SETTINGS.chatTextSize),
+      psyPreset: pick(s.psyPreset, PSY_PRESETS, DEFAULT_SETTINGS.psyPreset),
+      psyBase: str(s.psyBase).slice(0, 200),
+      psyVision: str(s.psyVision).slice(0, 100),
+      psySynth: str(s.psySynth).slice(0, 100)
     },
     activeAccountId: accounts.some((a: any) => a.id === r.activeAccountId) ? r.activeAccountId : undefined
   }

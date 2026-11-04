@@ -1,5 +1,5 @@
-import { ReactNode } from 'react'
-import { ACCENT_COLORS, ACCENTS, BACKGROUNDS, BG_COLORS, GLASS_MATERIALS, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, Settings, THEMES } from '@shared/types'
+import { ReactNode, useState } from 'react'
+import { ACCENT_COLORS, ACCENTS, BACKGROUNDS, BG_COLORS, GLASS_MATERIALS, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, PSY_PRESETS, PSY_PRESET_INFO, Settings, THEMES } from '@shared/types'
 import { AppState, call } from '../api'
 
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая', system: 'Системная' }
@@ -25,6 +25,7 @@ function ColorPick({ value, onChange, label }: { value: string; onChange: (v: st
     </label>
   )
 }
+const PSY_LABEL = { anthropic: 'Claude', openai: 'OpenAI', gemini: 'Gemini', openrouter: 'OpenRouter', deepseek: 'DeepSeek', custom: 'Свой адрес' }
 const WP_LABEL: Record<string, string> = { none: 'Без обоев', ...BG_LABEL }
 const WP_GRADIENT: Record<string, string> = { none: 'transparent', ...BG_GRADIENT }
 
@@ -38,6 +39,9 @@ const Row = ({ label, hint, children }: { label: string; hint?: string; children
 export function SettingsPage({ s }: { s: AppState }) {
   const st = s.settings
   const set = (v: Partial<Settings>) => call('settings:set', v)
+  const [key, setKey] = useState('')
+  const info = PSY_PRESET_INFO[st.psyPreset]
+  const saveKey = async () => { if ((await call('psy:key', { key: key.trim() })) !== undefined) setKey('') }
 
   return (
     <div className="page" style={{ maxWidth: 760 }}>
@@ -109,6 +113,32 @@ export function SettingsPage({ s }: { s: AppState }) {
             <button className="btn" disabled={st.chatWallpaper === 'none'} onClick={() => call('chat:wallpaperReset')}>Сбросить</button>
           </div>
         </Row>
+      </div>
+
+      <div className="glass group">
+        <h4>Психопортрет (нейросеть)</h4>
+        <Row label="Провайдер" hint="Подойдёт ключ любого сервиса с форматом OpenAI или Claude: OpenAI, Gemini, OpenRouter, DeepSeek, локальные модели и перепродавцы. Для чтения обложек модель должна уметь картинки: без этого разбор идёт только по подписям">
+          <div className="seg">{PSY_PRESETS.map((p) => <button key={p} className={st.psyPreset === p ? 'on' : ''} onClick={() => set({ psyPreset: p })}>{PSY_LABEL[p]}</button>)}</div>
+        </Row>
+        {st.psyPreset === 'custom' && (
+          <Row label="Адрес API" hint="Например https://api.example.com/v1 (формат OpenAI, без /chat/completions)">
+            <input className="input" style={{ width: 280 }} defaultValue={st.psyBase} placeholder="https://…/v1" onBlur={(e) => set({ psyBase: e.target.value })} />
+          </Row>
+        )}
+        <Row label="Модель для обложек" hint="Быстрая и дешёвая, с поддержкой картинок">
+          <input className="input" style={{ width: 280 }} defaultValue={st.psyVision} key={'v' + st.psyPreset} placeholder={info.vision || 'название модели'} onBlur={(e) => set({ psyVision: e.target.value })} />
+        </Row>
+        <Row label="Модель для портрета" hint="Сильнее: она пишет сам отчёт">
+          <input className="input" style={{ width: 280 }} defaultValue={st.psySynth} key={'s' + st.psyPreset} placeholder={info.synth || 'название модели'} onBlur={(e) => set({ psySynth: e.target.value })} />
+        </Row>
+        <Row label="Ключ API" hint={s.hasPsyKey ? 'Ключ сохранён и зашифрован средствами Windows. Приложение его не показывает' : 'Хранится только в зашифрованном виде на этом компьютере'}>
+          <div className="row">
+            <input className="input" type="password" style={{ width: 200 }} value={key} placeholder={s.hasPsyKey ? '••••••••' : 'sk-…'} autoComplete="off" onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && key.trim() && saveKey()} />
+            <button className="btn" disabled={!key.trim()} onClick={saveKey}>Сохранить</button>
+            <button className="btn" disabled={!s.hasPsyKey} onClick={() => call('psy:key', { key: null })}>Убрать</button>
+          </div>
+        </Row>
+        <div className="hint" style={{ padding: '0 0 14px' }}>При запуске портрета обложки, подписи и теги репостов уходят выбранному провайдеру. Чужому сервису с ключом стоит доверять так же, как любому, кто видит ваши данные.</div>
       </div>
 
       <div className="glass group">

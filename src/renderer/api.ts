@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
-import { AccountView, ChatExportProgress, Settings } from '@shared/types'
+import { AccountView, ChatExportProgress, Job, PsyJob, Settings } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
   settings: Settings
   notice: { id: number; text: string } | null
   chatExport: ChatExportProgress | null
+  job: Job | null // repost cleanup
+  psy: PsyJob | null // repost portrait
+  hasPsyKey: boolean // an API key is saved (the key itself never reaches the UI)
   activeAccountId?: string
   maximized: boolean
   version: string

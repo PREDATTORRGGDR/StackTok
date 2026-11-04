@@ -2,11 +2,15 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electro
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, GLASS_MATERIALS, HEX, OPEN_IN, SessionState, Settings, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, SessionState, Settings, THEMES } from '../shared/types'
 import { Browse, HOME_URL, configureSession, sessionState, startUrl } from './browse'
 import { ChatDump, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
+import type { RepostCleaner } from './repost-cleaner'
+import { cleanAccount } from './reposts'
+import { parseHandle, profileOf } from './psycho'
+import { KeyBox, runPortrait } from './psycho-run'
 import { Downloader } from './downloader'
 import { Store } from './store'
 
@@ -22,6 +26,9 @@ let overlay: ChatOverlay
 let downloader: Downloader
 let notice: { id: number; text: string } | null = null // one-off message for the UI, shown as a toast
 let chatExport: { progress: ChatExportProgress; cancelled: boolean } | null = null // the running chat export, if any
+let reposts: { job: Job; cleaner?: RepostCleaner; stop: boolean } | null = null // at most one repost cleanup at a time
+let psy: { job: PsyJob; stop: boolean } | null = null // at most one repost portrait at a time
+let keybox: KeyBox
 
 // ---------- validation ----------
 const isStr = (v: unknown, max = 500): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -47,7 +54,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, psy: psy?.job ?? null, hasPsyKey: keybox?.has() ?? false, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -80,6 +87,12 @@ function select(id: string | undefined) {
   browse.show(id)
   store.save()
   push()
+}
+
+function stopReposts() {
+  if (!reposts) return
+  reposts.stop = true
+  reposts.cleaner?.stop()
 }
 
 // ---------- IPC ----------
@@ -117,6 +130,8 @@ const handlers: Record<string, Handler> = {
   // Removing keeps the stored browser profile unless `wipe` is explicitly set.
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
     const acc = account(a?.id)
+    if (reposts?.job.accountId === acc.id) stopReposts()
+    if (psy?.job.accountId === acc.id) psy.stop = true
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
     store.data.accounts = store.data.accounts.filter((x) => x.id !== acc.id)
@@ -125,6 +140,8 @@ const handlers: Record<string, Handler> = {
   },
   'account:wipe': async (a: { id: string }) => {
     const acc = account(a?.id)
+    if (reposts?.job.accountId === acc.id) stopReposts()
+    if (psy?.job.accountId === acc.id) psy.stop = true
     await browse.wipe(acc.id)
     acc.verified = false
     store.save(); push()
@@ -141,6 +158,13 @@ const handlers: Record<string, Handler> = {
     select(acc.id)
     browse.open(acc.id, startUrl('chats'))
   },
+  // Toolbar shortcuts of the Browse page: Studio, own profile or messages, whatever the account's start page is.
+  'account:page': (a: { id: string; value: string }) => {
+    need(OPEN_IN.includes(a?.value as any), 'Bad value.')
+    const acc = account(a.id)
+    select(acc.id)
+    browse.open(acc.id, startUrl(a.value as (typeof OPEN_IN)[number]))
+  },
   'account:openIn': (a: { id: string; value: string }) => {
     need(OPEN_IN.includes(a?.value as any), 'Bad value.')
     account(a.id).openIn = a.value as (typeof OPEN_IN)[number]
@@ -153,6 +177,8 @@ const handlers: Record<string, Handler> = {
     browse.nav(a)
   },
   'browse:external': () => browse.openExternal(),
+  // Which profile is open in the account's view right now (null on any other page): the «Запустить анализ» button works on it.
+  'browse:profile': (a: { id: string }) => profileOf(browse.url(account(a?.id).id), DEV ? new URL(HOME_URL).origin : undefined) ?? null,
   'browse:muted': () => browse.isMuted(),
   'browse:toggleMute': () => browse.toggleMute(),
 
@@ -179,6 +205,10 @@ const handlers: Record<string, Handler> = {
     if (typeof s?.chatPrivacy === 'boolean') cur.chatPrivacy = s.chatPrivacy
     if (typeof s?.chatDim === 'number' && Number.isFinite(s.chatDim)) cur.chatDim = Math.min(100, Math.max(0, Math.round(s.chatDim)))
     if (CHAT_TEXT_SIZES.includes(s?.chatTextSize as any)) cur.chatTextSize = s.chatTextSize!
+    if (PSY_PRESETS.includes(s?.psyPreset as any)) cur.psyPreset = s.psyPreset!
+    if (typeof s?.psyBase === 'string' && s.psyBase.length <= 200) cur.psyBase = s.psyBase.trim()
+    if (typeof s?.psyVision === 'string' && s.psyVision.length <= 100) cur.psyVision = s.psyVision.trim()
+    if (typeof s?.psySynth === 'string' && s.psySynth.length <= 100) cur.psySynth = s.psySynth.trim()
     if (CHAT_WALLPAPERS.includes(s?.chatWallpaper as any) && (s.chatWallpaper !== 'custom' || overlay.hasImage())) cur.chatWallpaper = s.chatWallpaper!
     applyBackground()
     overlay.refresh()
@@ -243,6 +273,71 @@ const handlers: Record<string, Handler> = {
     }
   },
   'chat:exportCancel': () => { if (chatExport) chatExport.cancelled = true },
+  // The user pressed «Удалить все репосты»: removes every repost of the account through TikTok's own web endpoints.
+  'reposts:start': (a: { id: string }) => {
+    const acc = account(a?.id)
+    need(reposts?.job.status !== 'running', 'Очистка репостов уже идёт.')
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    const run: NonNullable<typeof reposts> = {
+      job: { accountId: acc.id, status: 'running', phase: 'scan', found: 0, removed: 0, failed: 0, startedAt: Date.now(), message: 'Подключаюсь к TikTok…' },
+      stop: false
+    }
+    reposts = run
+    void cleanAccount(run.job, acc.verified ? acc.username : undefined, new URL(HOME_URL).origin, browse.contents(acc.id), push, (c) => {
+      run.cleaner = c
+      if (run.stop) c.stop()
+    }).finally(push)
+    push()
+    return true
+  },
+  'reposts:stop': () => { stopReposts(); push() },
+  'reposts:dismiss': () => { if (reposts && reposts.job.status !== 'running') reposts = null; push() },
+  // The key goes to an OS-encrypted file in main; the UI only ever learns whether one is saved.
+  'psy:key': (a: { key: string | null }) => {
+    if (a?.key === null) keybox.clear()
+    else { need(isStr(a?.key, 400) && !/\s/.test(a.key), 'Ключ выглядит неверно.'); keybox.set(a.key.trim()) }
+    push()
+  },
+  // The user pressed «Психопортрет»: reads the account's reposts, lets a vision model look at covers and frames, writes a presentation.
+  // `username` = analyse any public profile by name (no sign-in needed; `id` only picks which account's browser view sends the requests).
+  'psy:start': async (a: { id: string; username?: string; frames?: boolean; limit?: number }) => {
+    const acc = account(a?.id)
+    need(psy?.job.status !== 'running', 'Портрет уже строится.')
+    const other = typeof a.username === 'string' && a.username.trim() ? parseHandle(a.username) : undefined
+    need(a.username === undefined || a.username === null || !String(a.username).trim() || !!other, 'Не похоже на имя профиля TikTok. Впишите @имя или ссылку на профиль.')
+    need(!!other || sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    const key = keybox.get()
+    need(!!key, 'Сначала сохраните ключ API в «Настройках».')
+    const set = store.data.settings
+    const pre = PSY_PRESET_INFO[set.psyPreset]
+    need(set.psyPreset !== 'anthropic' || key!.startsWith('sk-ant-'), 'Это не ключ Anthropic (у них он начинается с sk-ant-). Если ключ от шлюза или перепродавца, выберите в «Настройках» «Свой адрес» и впишите адрес из его инструкции.')
+    const base = (set.psyPreset === 'custom' ? set.psyBase : pre.base).trim()
+    need(/^https:\/\/[^\s]+$/.test(base) || /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(base), 'Укажите адрес API (https://…) в «Настройках».')
+    const vision = set.psyVision || pre.vision
+    const synth = set.psySynth || pre.synth
+    need(!!vision && !!synth, 'Укажите модели в «Настройках».')
+    const devPath = DEV ? process.env.STACKTOK_PSY_PATH : undefined
+    const stamp = new Date().toISOString().slice(0, 10)
+    const name = `Психопортрет-${(other || acc.username || acc.label).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 40)}-${stamp}.html`
+    const path = devPath || (await dialog.showSaveDialog(win, { title: 'Психопортрет: куда сохранить презентацию', defaultPath: join(app.getPath('downloads'), name), filters: [{ name: 'HTML-презентация', extensions: ['html'] }] })).filePath
+    if (!path) return null
+    const limit = typeof a.limit === 'number' && Number.isFinite(a.limit) ? Math.min(1500, Math.max(10, Math.round(a.limit))) : 500
+    const run = { job: { accountId: acc.id, status: 'running', phase: 'collect', done: 0, total: 0, message: 'Подключаюсь к TikTok…', startedAt: Date.now(), tokens: 0, target: other } as PsyJob, stop: false }
+    psy = run
+    const target = browse.chatTarget(acc.id) ?? (browse.contents(acc.id), browse.chatTarget(acc.id))
+    target?.hold() // the page keeps working with the window covered or minimised, same as in the chat export
+    void runPortrait({
+      wc: browse.contents(acc.id), ses: browse.contents(acc.id).session, base: new URL(HOME_URL).origin,
+      username: !other && acc.verified ? acc.username : undefined, target: other, owner: other ? { name: '@' + other, handle: other } : { name: acc.label, handle: acc.username },
+      provider: { kind: pre.kind, base, key: key! }, visionModel: vision, synthModel: synth,
+      devOrigin: DEV ? new URL(HOME_URL).origin : undefined, frames: a.frames === true, limit, job: run.job, onChange: push, cancelled: () => run.stop, path
+    }).then((j) => { if (j.status === 'done' && j.path && !devPath) shell.showItemInFolder(j.path) }).finally(() => { target?.release(); push() })
+    push()
+    return true
+  },
+  'psy:stop': () => { if (psy) psy.stop = true; push() },
+  'psy:dismiss': () => { if (psy && psy.job.status !== 'running') psy = null; push() },
+  'psy:open': () => { if (psy?.job.path) return shell.openPath(psy.job.path) },
   'win:min': () => win.minimize(),
   'win:max': () => { if (win.isMaximized()) win.unmaximize(); else win.maximize() },
   'win:close': () => win.close(),
@@ -291,6 +386,7 @@ function createWindow() {
 app.whenReady().then(() => {
   store = new Store(join(app.getPath('userData'), 'stacktok.json'))
   overlay = new ChatOverlay(() => store.data.settings, join(app.getPath('userData'), 'chat-wallpaper.txt'), DEV ? new URL(HOME_URL).origin : undefined)
+  keybox = new KeyBox(join(app.getPath('userData'), 'psy-key.bin'))
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()

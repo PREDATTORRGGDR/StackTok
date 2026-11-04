@@ -113,8 +113,9 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 .card .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .card .openin { display: flex; align-items: center; gap: 10px; }
 .seg.sm button { padding: 4px 12px; font-size: 12.5px; }
-.card .actions { display: flex; gap: 8px; margin-top: auto; }
-.card .actions .btn.primary { flex: 1; }
+.card .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.card .actions .btn { flex: 1 1 auto; padding-inline: 14px; }
+.card .actions .btn.primary { flex-grow: 3; }
 .add-card { border-radius: 26px; min-height: 176px; display: grid; place-items: center; text-align: center; color: var(--muted); border: 1.5px dashed rgba(var(--ink), 0.28); background: rgba(var(--ink), 0.035); transition: all 0.3s var(--ease); }
 .add-card:hover { color: var(--text); background: rgba(var(--ink), 0.09); border-color: rgba(var(--accent-rgb), 0.8); transform: translateY(-3px); }
 .add-card .plus { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 10px; background: rgba(var(--ink), 0.1); border: 1px solid var(--stroke); }
@@ -137,7 +138,14 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px) scale(0.96); } } @keyframes fade { from { opacity: 0; } }
 
 /* browse */
-.toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-radius: 22px; margin-bottom: 12px; flex: none; }
+.toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 10px; border-radius: 22px; margin-bottom: 12px; flex: none; container-type: inline-size; min-width: 0; }
+/* a narrow window keeps only the icons; the title still tells what each button does */
+@container (max-width: 1260px) { .toolbar .btn .lbl.first { display: none; } .toolbar .btn:has(.lbl.first) { width: 34px; height: 34px; padding: 0; } }
+@container (max-width: 1130px) { .toolbar .btn:not(.analyze) .lbl { display: none; } .toolbar .btn.sm:not(.analyze) { width: 34px; height: 34px; padding: 0; } }
+@container (max-width: 760px) { .toolbar .btn .lbl { display: none; } .toolbar .btn.sm { width: 34px; height: 34px; padding: 0; } .toolbar .btn.analyze { max-width: none; margin: 0 2px; } }
+.tgroup { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 16px; background: rgba(var(--ink), 0.05); border: 1px solid var(--stroke); flex: none; }
+.toolbar .btn.analyze { margin: 0 6px; flex: none; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.toolbar .btn.analyze .lbl { overflow: hidden; text-overflow: ellipsis; }
 .banner { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 18px; margin-bottom: 12px; flex: none; animation: pop 0.3s var(--ease); background: rgba(var(--accent-rgb), 0.18); }
 .viewport { flex: 1; min-height: 0; border-radius: 18px; background: rgba(0, 0, 0, 0.22); border: 1px solid var(--stroke); }
 .frame-wrap { display: flex; flex-direction: column; height: 100%; }
@@ -234,3 +242,35 @@ code { font-family: Consolas, monospace; font-size: 12px; word-break: break-all;
 :root[data-bg='clear'][data-theme='dark'] { --glass-tint: 14, 16, 26; }
 :root[data-bg='clear'][data-theme='dark'] .glass { box-shadow: inset 0 1px 0 var(--hi), 0 0 0 0.5px rgba(0, 0, 0, 0.5), 0 14px 44px rgba(0, 0, 0, 0.35); }
 :root[data-bg='clear'][data-theme='light'] .glass { box-shadow: inset 0 1px 0 #fff, 0 0 0 0.5px rgba(30, 40, 90, 0.25), 0 14px 40px rgba(30, 40, 90, 0.18); }
+
+/* repost cleanup */
+.jobcard { position: fixed; left: 18px; bottom: 18px; z-index: 55; width: 236px; border-radius: 22px; padding: 14px; display: flex; flex-direction: column; gap: 12px; animation: pop 0.3s var(--ease); background: rgba(30, 34, 48, 0.82); }
+:root[data-theme='light'] .jobcard { background: rgba(255, 255, 255, 0.92); }
+/* Tools page: features grouped in sections */
+.toolgroup { padding: 0 6px 18px; } .toolgroup h4 { margin: 0 0 10px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 650; }
+.toolgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.toolcard { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; border-radius: 22px; min-height: 176px; }
+.toolcard.off .ic, .toolcard.off .tt { opacity: 0.6; }
+.toolcard .ic { width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center; color: var(--accent); background: rgba(var(--accent-rgb), 0.16); border: 1px solid rgba(var(--accent-rgb), 0.3); }
+.toolcard .tt { font-weight: 640; font-size: 15px; } .toolcard .td { line-height: 1.45; }
+.pickacct { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--stroke); background: rgba(var(--ink), 0.05); }
+.pickacct select { background: transparent; border: 0; color: var(--text); font: inherit; outline: none; max-width: 220px; } .pickacct option { color: #14161f; }
+.jobcard.psycard { left: auto; right: 18px; width: 260px; }
+.jobcard .steps { display: flex; gap: 6px; }
+.jobcard .step { flex: 1; text-align: center; font-size: 11.5px; padding: 4px 0; border-radius: 999px; color: var(--faint); background: rgba(var(--ink), 0.06); border: 1px solid var(--stroke); transition: all 0.3s var(--ease); }
+.jobcard .step.now { color: var(--text); border-color: rgba(var(--accent-rgb), 0.7); background: rgba(var(--accent-rgb), 0.18); }
+.jobcard .step.done { color: var(--ok); border-color: rgba(79, 216, 160, 0.4); }
+.jobcard .bar { height: 8px; border-radius: 999px; overflow: hidden; background: rgba(var(--ink), 0.1); }
+.jobcard .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.5s var(--ease); }
+.jobcard.done .bar i { background: linear-gradient(90deg, #2fbf86, var(--ok)); }
+.jobcard .bar.indeterminate i { background: linear-gradient(90deg, transparent, var(--accent-2), transparent); background-size: 40% 100%; background-repeat: no-repeat; animation: sweep 1.2s linear infinite; }
+@keyframes sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.jobcard .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.jobcard .stats div { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 0; border-radius: 12px; background: rgba(var(--ink), 0.05); }
+.jobcard .stats b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.jobcard .stats span { font-size: 11px; color: var(--faint); }
+.jobcard .faint { color: var(--faint); }
+.ok-ic { color: var(--ok); } .warn-ic { color: var(--warn); }
+.spinner { width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(var(--ink), 0.25); border-top-color: var(--accent-2); animation: spin 0.8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn.primary.danger-fill, :root[data-theme='light'] .btn.primary.danger-fill { color: #fff; background: linear-gradient(145deg, #ff8a8a, #ff4d4d); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 6px 22px rgba(255, 77, 77, 0.4); }

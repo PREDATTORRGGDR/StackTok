@@ -3,16 +3,23 @@ import { AccountView } from '@shared/types'
 import { call } from './api'
 import { Modal } from './ui'
 
-export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe'; acct: AccountView }
+export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'reposts' | 'psy'; acct: AccountView }
 
 export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () => void; onAdded: () => void }) {
   const [text, setText] = useState(dialog.kind === 'rename' ? dialog.acct.label : '')
   const [wipe, setWipe] = useState(false)
+  const [frames, setFrames] = useState(false)
+  const [limit, setLimit] = useState(500)
+  const signed = dialog.kind === 'psy' && dialog.acct.session === 'logged_in'
+  const [other, setOther] = useState(true) // true = any public profile by name, false = the account itself
+  const [who, setWho] = useState('')
   const typing = dialog.kind === 'add' || dialog.kind === 'rename'
 
   async function submit() {
     if (dialog.kind === 'add') { if (await call('account:add', { label: text })) { onAdded(); close() } return }
     if (dialog.kind === 'rename') await call('account:rename', { id: dialog.acct.id, label: text })
+    else if (dialog.kind === 'reposts') { if ((await call('reposts:start', { id: dialog.acct.id })) === undefined) return }
+    else if (dialog.kind === 'psy') { const r = await call('psy:start', { id: dialog.acct.id, username: other || !signed ? who : undefined, frames, limit }); if (r === undefined) return; if (r === null) return close() }
     else if (dialog.kind === 'remove') await call('account:remove', { id: dialog.acct.id, wipe })
     else await call('account:wipe', { id: dialog.acct.id })
     close()
@@ -40,10 +47,30 @@ export function Dialogs({ dialog, close, onAdded }: { dialog: Dialog; close: () 
           <span className="muted small">«{dialog.acct.label}» будет разлогинен, cookies, хранилище и кэш очистятся. Сам аккаунт останется в списке.</span>
         </>
       )}
+      {dialog.kind === 'reposts' && (
+        <>
+          <h3>Удалить все репосты?</h3>
+          <span className="muted small">У аккаунта «{dialog.acct.label}»{dialog.acct.username ? ` (@${dialog.acct.username})` : ''} будут убраны все репосты любой давности. Собственные видео, лайки и подписки не затрагиваются. Вернуть репосты автоматически нельзя.</span>
+          <span className="muted small">Можно пользоваться приложением, пока идёт очистка: прогресс будет в углу окна.</span>
+        </>
+      )}
+      {dialog.kind === 'psy' && (
+        <>
+          <h3>Психопортрет по репостам</h3>
+          {signed && <div className="seg sm"><button className={other ? 'on' : ''} onClick={() => setOther(true)}>Любой профиль</button><button className={!other ? 'on' : ''} onClick={() => setOther(false)}>Мой аккаунт «{dialog.acct.label}»</button></div>}
+          {(other || !signed) && <input className="input" autoFocus placeholder="@имя или ссылка на профиль TikTok" value={who} onChange={(e) => setWho(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && who.trim() && submit()} />}
+          <span className="muted small">{other || !signed ? 'Берутся репосты, которые видит любой посетитель профиля; вход в аккаунт не нужен (запросы идут из окна «' + dialog.acct.label + '»). У закрытых профилей репосты не видны.' : `Репосты аккаунта «${dialog.acct.label}»${dialog.acct.username ? ` (@${dialog.acct.username})` : ''}.`} Нейросеть посмотрит обложки и подписи и напишет портрет в виде презентации: черты, настроение, о чём он думает, чувства и отношения, интересы, манера общения. Это догадки по ленте, а не факты.</span>
+          <span className="muted small">Обложки, подписи и теги репостов уйдут в API выбранного в «Настройках» провайдера, вы платите по своему ключу. Клинических диагнозов и категоричных выводов о расе, национальности и ориентации портрет не делает, третьих лиц не называет.</span>
+          <div className="row small"><span>Сколько последних репостов</span>
+            <div className="seg sm">{[200, 500, 1000, 1500].map((n) => <button key={n} className={limit === n ? 'on' : ''} onClick={() => setLimit(n)}>{n === 1500 ? 'до 1500' : n}</button>)}</div>
+          </div>
+          <label className="row small" style={{ cursor: 'pointer' }}><input type="checkbox" checked={frames} onChange={(e) => setFrames(e.target.checked)} /> Ещё и кадры из видео (глубже, но медленнее и дороже; первые 48 видео)</label>
+        </>
+      )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
         <button className="btn" onClick={close}>Отмена</button>
-        <button className="btn primary" disabled={typing && !text.trim()} onClick={submit}>
-          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : wipe ? 'Убрать и стереть' : 'Убрать'}
+        <button className={'btn primary' + (dialog.kind === 'reposts' ? ' danger-fill' : '')} disabled={(typing && !text.trim()) || (dialog.kind === 'psy' && (other || !signed) && !who.trim())} onClick={submit}>
+          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : dialog.kind === 'reposts' ? 'Удалить репосты' : dialog.kind === 'psy' ? 'Построить портрет' : wipe ? 'Убрать и стереть' : 'Убрать'}
         </button>
       </div>
     </Modal>

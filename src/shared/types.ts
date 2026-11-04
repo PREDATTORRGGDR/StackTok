@@ -32,6 +32,16 @@ export const GLASS_MATERIALS = ['acrylic', 'mica', 'tabbed'] as const // native 
 export const HEX = /^#[0-9a-f]{6}$/i
 export const CHAT_WALLPAPERS = ['none', 'aurora', 'sunset', 'ocean', 'graphite', 'custom'] as const // 'custom' = the image file picked in main
 export const CHAT_TEXT_SIZES = ['small', 'normal', 'large'] as const
+/** Model providers for the repost portrait. `openai` speaks Chat Completions, which most others copy; `custom` = any such address. */
+export const PSY_PRESETS = ['anthropic', 'openai', 'gemini', 'openrouter', 'deepseek', 'custom'] as const
+export const PSY_PRESET_INFO: Record<(typeof PSY_PRESETS)[number], { kind: 'anthropic' | 'openai'; base: string; vision: string; synth: string }> = {
+  anthropic: { kind: 'anthropic', base: 'https://api.anthropic.com', vision: 'claude-haiku-5-5', synth: 'claude-haiku-5-5' }, // the cheapest model that reads pictures is the default for both steps
+  openai: { kind: 'openai', base: 'https://api.openai.com/v1', vision: 'gpt-4o-mini', synth: 'gpt-4o' },
+  gemini: { kind: 'openai', base: 'https://generativelanguage.googleapis.com/v1beta/openai', vision: 'gemini-2.5-flash', synth: 'gemini-2.5-pro' },
+  openrouter: { kind: 'openai', base: 'https://openrouter.ai/api/v1', vision: 'google/gemini-2.5-flash', synth: 'anthropic/claude-sonnet-4.5' },
+  deepseek: { kind: 'openai', base: 'https://api.deepseek.com', vision: 'deepseek-chat', synth: 'deepseek-chat' },
+  custom: { kind: 'openai', base: '', vision: 'claude-haiku-5-5', synth: 'claude-haiku-5-5' } // a gateway with many models: the same cheap one
+}
 
 export interface Settings {
   theme: (typeof THEMES)[number]
@@ -49,6 +59,10 @@ export interface Settings {
   chatDim: number // 0..100, how dark the wallpaper is under the glass
   chatPrivacy: boolean // blur names, previews and messages until the mouse is over them
   chatTextSize: (typeof CHAT_TEXT_SIZES)[number]
+  psyPreset: (typeof PSY_PRESETS)[number] // which provider reads covers and writes the portrait (the API key itself lives only in main)
+  psyBase: string // address for 'custom'
+  psyVision: string // model that reads covers; '' = the preset's own
+  psySynth: string // model that writes the portrait; '' = the preset's own
 }
 
 export interface Data {
@@ -60,5 +74,35 @@ export interface Data {
 
 export interface Bounds { x: number; y: number; width: number; height: number }
 
+/** Progress of a repost cleanup, pushed to the UI with every change. */
+export interface Job {
+  accountId: string
+  status: 'running' | 'done' | 'stopped'
+  phase: 'scan' | 'delete' | 'verify'
+  pass?: number // delete passes so far; each one ends with a rescan from the start
+  found: number // every repost seen on the profile so far
+  removed: number
+  failed: number
+  message: string
+  startedAt: number
+  deleteStartedAt?: number // for the time-left estimate
+  finishedAt?: number
+}
+
 /** Progress of a running chat export: messages loaded and read, then files saved, then the file written. */
 export interface ChatExportProgress { phase: 'loading' | 'reading' | 'media' | 'saving'; done: number; total?: number }
+
+/** Progress of a repost portrait (VLM analysis), pushed to the UI with every change. */
+export interface PsyJob {
+  accountId: string
+  status: 'running' | 'done' | 'stopped'
+  phase: 'collect' | 'vision' | 'synth' | 'save'
+  done: number
+  total: number
+  message: string
+  startedAt: number
+  finishedAt?: number
+  path?: string // where the finished presentation was saved
+  target?: string // @name of a profile that is not one of the app's accounts
+  tokens: number
+}

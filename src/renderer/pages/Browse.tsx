@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bug, ExternalLink, FileDown, Home, MessageCircle, Plus, RotateCw, ShieldCheck, Users, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bug, Clapperboard, ExternalLink, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
 import { AccountView, ChatExportProgress } from '@shared/types'
 import { call, toast } from '../api'
 import { Dialog } from '../Dialogs'
@@ -8,7 +8,7 @@ import { Page } from '../App'
 export const progressText = (p: ChatExportProgress) =>
   p.phase === 'loading' ? `Загружаю историю: ${p.done} сообщений…` : p.phase === 'reading' ? `Читаю сообщения${p.total ? `: ${p.done} из ${p.total}` : `: ${p.done}`}…` : p.phase === 'media' ? `Сохраняю картинки и стикеры: ${p.done} из ${p.total ?? 0}…` : 'Записываю файл…'
 
-export function Browse({ active, go, openDialog, exporting }: { active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void; exporting: ChatExportProgress | null }) {
+export function Browse({ active, go, openDialog, exporting, reposting, analyzing }: { active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void; exporting: ChatExportProgress | null; reposting: boolean; analyzing: boolean }) {
   const box = useRef<HTMLDivElement>(null)
   const [confirming, setConfirming] = useState(false)
   const [username, setUsername] = useState('')
@@ -36,6 +36,18 @@ export function Browse({ active, go, openDialog, exporting }: { active?: Account
     window.addEventListener('resize', send)
     return () => { ro.disconnect(); window.removeEventListener('resize', send); call('browse:bounds', null, true) }
   }, [active?.id, covered])
+
+  const [profile, setProfile] = useState<string | null>(null) // the profile open in the view now, if the page is one
+
+  // The page is TikTok's own single-page app, so the address is polled; it is a cheap local call.
+  useEffect(() => {
+    if (!active) return
+    let on = true
+    const tick = async () => { const p = await call<string | null>('browse:profile', { id: active.id }, true); if (on) setProfile(p ?? null) }
+    tick()
+    const t = setInterval(tick, 700)
+    return () => { on = false; clearInterval(t) }
+  }, [active?.id])
 
   useEffect(() => setConfirming(false), [active?.id])
   useEffect(() => { if (active) call<boolean>('browse:muted', undefined, true).then((m) => setMuted(m ?? true)) }, [active?.id])
@@ -69,21 +81,34 @@ export function Browse({ active, go, openDialog, exporting }: { active?: Account
     toast(`Чат сохранён: ${r.messages} сообщений. ${r.complete ? 'История загружена полностью.' : 'История неполная, подробности в файле.'}`, !r.complete)
   }
   const nav = (a: string) => call('browse:nav', a)
+  const analyze = () => call('psy:start', { id: active!.id, username: profile, frames: false, limit: 500 })
   const signedIn = active.session === 'logged_in'
 
   return (
     <>
       <div className="glass toolbar">
+        <div className="tgroup">
         <button className="btn ghost round" aria-label="Назад" onClick={() => nav('back')}><ArrowLeft size={17} /></button>
         <button className="btn ghost round" aria-label="Вперёд" onClick={() => nav('forward')}><ArrowRight size={17} /></button>
         <button className="btn ghost round" aria-label="Обновить" onClick={() => nav('reload')}><RotateCw size={16} /></button>
         <button className="btn ghost round" aria-label="Домой" onClick={() => nav('home')}><Home size={17} /></button>
-        <button className="btn ghost sm" title="Открыть сообщения этого аккаунта" onClick={() => call('account:chats', { id: active.id })}><MessageCircle size={16} />Чаты</button>
-        <button className="btn ghost sm" disabled={!!exporting} title="Сохранить открытый диалог в HTML-файл: все сообщения, время, видео, стикеры и картинки" onClick={exportChat}><FileDown size={16} />Экспорт чата</button>
-        <button className="btn ghost round" aria-label={muted ? 'Включить звук' : 'Выключить звук'} title={muted ? 'Звук выключен — нажмите, чтобы включить' : 'Выключить звук'} onClick={async () => setMuted((await call<boolean>('browse:toggleMute')) ?? muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
+        </div>
+        <div className="tgroup">
+        <button className="btn ghost sm" title="Открыть TikTok Studio этого аккаунта" onClick={() => call('account:page', { id: active.id, value: 'studio' })}><Clapperboard size={16} /><span className="lbl">Студия</span></button>
+        <button className="btn ghost sm" title="Открыть профиль этого аккаунта" onClick={() => call('account:page', { id: active.id, value: 'profile' })}><UserRound size={16} /><span className="lbl">Профиль</span></button>
+        <button className="btn ghost sm" title="Открыть сообщения этого аккаунта" onClick={() => call('account:page', { id: active.id, value: 'chats' })}><MessageCircle size={16} /><span className="lbl">Чаты</span></button>
+        </div>
+        <div className="tgroup">
+        <button className="btn ghost sm" disabled={!!exporting} title="Сохранить открытый диалог в HTML-файл: все сообщения, время, видео, стикеры и картинки" onClick={exportChat}><FileDown size={16} /><span className="lbl">Экспорт чата</span></button>
+        <button className="btn ghost sm" disabled={!signedIn || !!reposting} title={reposting ? 'Удаление репостов уже идёт' : signedIn ? 'Удалить все репосты этого аккаунта' : 'Сначала войдите в аккаунт'} onClick={() => openDialog({ kind: 'reposts', acct: active })}><Repeat2 size={16} /><span className="lbl">Удалить репосты</span></button>
+        </div>
+        <button className="btn primary sm analyze" disabled={!profile || analyzing} title={analyzing ? 'Анализ уже идёт' : profile ? `Психопортрет профиля @${profile} по его репостам` : 'Откройте профиль человека (страница вида tiktok.com/@имя), и кнопка станет активной'} onClick={analyze}><Sparkles size={16} /><span className="lbl">{profile ? `Запустить анализ @${profile}` : 'Запустить анализ'}</span></button>
         <span style={{ flex: 1 }} />
-        <button className="btn ghost sm" onClick={() => call('browse:external')} title="Если встроенный просмотр заблокирован, откройте в браузере по умолчанию"><ExternalLink size={15} />Открыть в браузере</button>
+        <div className="tgroup">
+        <button className="btn ghost round" aria-label={muted ? 'Включить звук' : 'Выключить звук'} title={muted ? 'Звук выключен — нажмите, чтобы включить' : 'Выключить звук'} onClick={async () => setMuted((await call<boolean>('browse:toggleMute')) ?? muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
+        <button className="btn ghost sm" onClick={() => call('browse:external')} title="Если встроенный просмотр заблокирован, откройте в браузере по умолчанию"><ExternalLink size={15} /><span className="lbl first">Открыть в браузере</span></button>
         <button className="btn ghost round" aria-label="Диагностика" title="Инструменты разработчика сессии" onClick={() => call('account:devtools')}><Bug size={16} /></button>
+        </div>
       </div>
       {exporting && (
         <div className="glass banner">
