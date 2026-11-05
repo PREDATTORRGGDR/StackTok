@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { PsyJob } from '../shared/types'
-import { Cover, Deps, Img, PAGE_SIZE, PageReply, PsyError, RepostItem, Vlm, analyze, pool, type Provider } from './psycho'
+import { Cover, Deps, Img, PAGE_SIZE, PageReply, PsyError, RepostItem, Vlm, analyze, pool, type Provider, type Subject } from './psycho'
 import { renderDeck } from './psycho-html'
 import { js, whoAmI } from './reposts'
 
@@ -188,6 +188,7 @@ export interface RunArgs {
   synthModel: string
   frames: boolean
   limit: number
+  subject?: Subject
   job: PsyJob
   onChange: () => void
   cancelled: () => boolean
@@ -239,7 +240,7 @@ export async function runPortrait(a: RunArgs): Promise<PsyJob> {
       progress: (p) => set({ phase: p.phase, done: p.done, total: p.total, message: p.message, tokens: vlm.usage.inTok + vlm.usage.outTok }),
       cancelled: a.cancelled
     }
-    const res = await analyze(deps, { limit: a.limit, frames: a.frames, visionModel: a.visionModel, synthModel: a.synthModel })
+    const res = await analyze(deps, { limit: a.limit, frames: a.frames, visionModel: a.visionModel, synthModel: a.synthModel, subject: a.subject })
 
     set({ phase: 'save', message: 'Собираю презентацию…', tokens: vlm.usage.inTok + vlm.usage.outTok })
     const thumbs = new Map<number, string>()

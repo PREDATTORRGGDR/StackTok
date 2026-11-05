@@ -81,7 +81,7 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
     toast(`Чат сохранён: ${r.messages} сообщений. ${r.complete ? 'История загружена полностью.' : 'История неполная, подробности в файле.'}`, !r.complete)
   }
   const nav = (a: string) => call('browse:nav', a)
-  const analyze = () => call('psy:start', { id: active!.id, username: profile, frames: false, limit: 500 })
+  const analyze = () => openDialog({ kind: 'psy', acct: active!, who: profile ?? '', overlay: true })
   const signedIn = active.session === 'logged_in'
 
   return (

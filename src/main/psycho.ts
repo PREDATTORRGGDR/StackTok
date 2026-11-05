@@ -27,7 +27,7 @@ export const SYNTH_MODEL = 'claude-haiku-5-5'
 export const BATCH = 12 // videos per vision request
 export const VISION_THREADS = 6
 export const PAGE_SIZE = 30
-export const MAX_ITEMS = 1500
+export const MAX_ITEMS = 10000
 
 export type Phase = 'collect' | 'vision' | 'synth' | 'save'
 export interface Progress { phase: Phase; done: number; total: number; message: string }
@@ -205,6 +205,7 @@ export interface Report {
   evidence: { i: number; quote: string; meaning: string }[]
   timeline: { period: string; shift: string }[]
   advice: string[]
+  forYou: { who: string; feelings: string; signs: string[]; nextSteps: string[]; avoid: string[] } | null // only when the user said who this person is to them
   caveat: string
 }
 
@@ -241,6 +242,8 @@ export function sanitizeReport(raw: unknown): Report {
     evidence: arr(r.evidence).slice(0, 10).filter((e) => Number.isInteger(Number(e.i))).map((e) => ({ i: Number(e.i), quote: str(e.quote, 200), meaning: str(e.meaning, 300) })),
     timeline: arr(r.timeline).slice(0, 5).map((t) => ({ period: str(t.period, 40), shift: str(t.shift, 300) })).filter((t) => t.period),
     advice: list(r.advice, 5),
+    forYou: r.forYou && typeof r.forYou === 'object' && (r.forYou.feelings || r.forYou.nextSteps)
+      ? { who: str(r.forYou.who, 40), feelings: str(r.forYou.feelings, 1500), signs: list(r.forYou.signs, 6, 260), nextSteps: list(r.forYou.nextSteps, 6, 300), avoid: list(r.forYou.avoid, 4, 220) } : null,
     caveat: str(r.caveat, 400) || 'Репосты показывают вкусы, а не человека целиком. Это игра, а не диагноз.'
   }
 }
@@ -308,7 +311,14 @@ export interface Deps {
   cancelled(): boolean
 }
 
-export interface Opts { limit: number; frames: boolean; visionModel?: string; synthModel?: string }
+/** What the user knows about the person (all optional, typed by the user): makes the portrait more personal. */
+export interface Subject { gender?: 'male' | 'female'; age?: string; relation?: string }
+export const subjectNote = (s?: Subject): string => {
+  if (!s) return ''
+  const l = [s.gender && `Пол: ${s.gender === 'male' ? 'мужской' : 'женский'}`, s.age && `Возраст: ${s.age}`, s.relation && `Кем он(а) приходится тому, для кого пишется портрет: ${s.relation}`].filter(Boolean)
+  return l.length ? `Что известно о человеке (со слов заказчика портрета, это важнее догадок по ленте; учти при тоне, обращении и выводах, но не выдумывай фактов):\n${l.join('\n')}\n\n` : ''
+}
+export interface Opts { limit: number; frames: boolean; visionModel?: string; synthModel?: string; subject?: Subject }
 export interface Analysis { items: RepostItem[]; notes: Map<number, Note>; covers: Map<number, Cover>; stats: Stats; report: Report; warnings: string[]; usage: Vlm['usage'] }
 
 /** Pages through the reposts list: through empty pages while TikTok says `hasMore`, stops on a stuck cursor. */
@@ -391,7 +401,7 @@ export async function analyze(d: Deps, o: Opts): Promise<Analysis> {
   const text = digest(items, notes, stats)
   let report: Report | null = null
   for (let attempt = 0; attempt < 2 && !report; attempt++) {
-    const raw = await d.vlm.ask(synth, SYNTH_SYSTEM, [{ type: 'text', text: text + (attempt ? '\n\nВерни только JSON, без пояснений.' : '') }], 16000, d.cancelled)
+    const raw = await d.vlm.ask(synth, SYNTH_SYSTEM, [{ type: 'text', text: subjectNote(o.subject) + text + (attempt ? '\n\nВерни только JSON, без пояснений.' : '') }], 16000, d.cancelled)
     const j = parseJson(raw)
     if (j && typeof j === 'object' && !Array.isArray(j)) report = sanitizeReport(j)
   }

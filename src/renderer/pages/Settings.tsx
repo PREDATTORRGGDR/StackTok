@@ -1,16 +1,15 @@
 import { ReactNode, useState } from 'react'
-import { ACCENT_COLORS, ACCENTS, BACKGROUNDS, BG_COLORS, GLASS_MATERIALS, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, PSY_PRESETS, PSY_PRESET_INFO, Settings, THEMES } from '@shared/types'
+import { ACCENT_COLORS, ACCENTS, BACKGROUNDS, BG_COLORS, BG_SOLID, GLASS_MATERIALS, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, PSY_PRESETS, PSY_PRESET_INFO, Settings, THEMES } from '@shared/types'
 import { AppState, call } from '../api'
 
 const THEME_LABEL = { dark: 'Тёмная', light: 'Светлая', system: 'Системная' }
 const ACCENT_LABEL = { blue: 'Синий', violet: 'Фиолетовый', pink: 'Розовый', red: 'Красный', orange: 'Оранжевый', yellow: 'Жёлтый', lime: 'Лайм', green: 'Зелёный', teal: 'Бирюзовый', cyan: 'Голубой' }
-const BG_LABEL = { clear: 'Чистое', aurora: 'Аврора', sunset: 'Закат', ocean: 'Океан', graphite: 'Графит', forest: 'Лес', rose: 'Роза', midnight: 'Полночь', lavender: 'Лаванда', mint: 'Мята', ember: 'Жар', mono: 'Моно', custom: 'Свой' }
+const BG_LABEL = { clear: 'Чистое', graphite: 'Графит', black: 'Чёрный', midnight: 'Полночь', ocean: 'Океан', forest: 'Лес', wine: 'Вино', plum: 'Слива', sand: 'Песок', custom: 'Свой' }
+const WP_NAMES = { aurora: 'Аврора', sunset: 'Закат', ocean: 'Океан', graphite: 'Графит' }
 const MATERIAL_LABEL = { acrylic: 'Акрил', mica: 'Слюда', tabbed: 'Слюда+' }
+const CLEAR_TILE = 'repeating-conic-gradient(rgba(255,255,255,.22) 0% 25%, rgba(255,255,255,.06) 0% 50%) 0 0/14px 14px'
 const trio = (c: readonly string[]) => `linear-gradient(135deg,${c[0]},${c[1]} 55%,${c[2]})`
-const BG_GRADIENT: Record<string, string> = {
-  clear: 'repeating-conic-gradient(rgba(255,255,255,.22) 0% 25%, rgba(255,255,255,.06) 0% 50%) 0 0/14px 14px',
-  ...Object.fromEntries(Object.entries(BG_COLORS).map(([k, v]) => [k, trio(v)]))
-}
+const BG_GRADIENT: Record<string, string> = Object.fromEntries(Object.entries(BG_COLORS).map(([k, v]) => [k, trio(v)])) // chat wallpaper previews
 
 const TEXT_LABEL = { small: 'Мелкий', normal: 'Обычный', large: 'Крупный' }
 const WALLPAPERS = CHAT_WALLPAPERS.filter((w) => w !== 'custom')
@@ -26,7 +25,7 @@ function ColorPick({ value, onChange, label }: { value: string; onChange: (v: st
   )
 }
 const PSY_LABEL = { anthropic: 'Claude', openai: 'OpenAI', gemini: 'Gemini', openrouter: 'OpenRouter', deepseek: 'DeepSeek', custom: 'Свой адрес' }
-const WP_LABEL: Record<string, string> = { none: 'Без обоев', ...BG_LABEL }
+const WP_LABEL: Record<string, string> = { none: 'Без обоев', ...WP_NAMES }
 const WP_GRADIENT: Record<string, string> = { none: 'transparent', ...BG_GRADIENT }
 
 const Row = ({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) => (
@@ -38,6 +37,7 @@ const Row = ({ label, hint, children }: { label: string; hint?: string; children
 
 export function SettingsPage({ s }: { s: AppState }) {
   const st = s.settings
+  const isLight = st.theme === 'light' || (st.theme === 'system' && matchMedia('(prefers-color-scheme: light)').matches)
   const set = (v: Partial<Settings>) => call('settings:set', v)
   const [key, setKey] = useState('')
   const info = PSY_PRESET_INFO[st.psyPreset]
@@ -58,25 +58,30 @@ export function SettingsPage({ s }: { s: AppState }) {
             <ColorPick label="Свой цвет" value={st.accentColor} onChange={(v) => set({ accentColor: v })} />
           </div>
         </Row>
-        <Row label="Фон" hint="«Чистое» — настоящая прозрачность: стекло показывает рабочий стол. «Свой» — три цвета из палитры">
-          <div className="bgs">{BACKGROUNDS.map((b) => <button key={b} className={'bgtile' + (st.background === b ? ' on' : '')} style={{ background: b === 'custom' ? trio(st.bgCustom) : BG_GRADIENT[b] }} onClick={() => set({ background: b })}><span>{BG_LABEL[b]}</span></button>)}</div>
+        <Row label="Фон" hint="Один сплошной цвет. «Чистое» — настоящая прозрачность: стекло показывает рабочий стол. «Свой» — любой цвет из палитры">
+          <div className="bgs">{BACKGROUNDS.map((b) => <button key={b} className={'bgtile' + (st.background === b ? ' on' : '')} style={{ background: b === 'clear' ? CLEAR_TILE : b === 'custom' ? st.bgCustom[0] : BG_SOLID[b][isLight ? 'light' : 'dark'] }} onClick={() => set({ background: b })}><span>{BG_LABEL[b]}</span></button>)}</div>
         </Row>
         {st.background === 'custom' && (
-          <Row label="Цвета фона" hint="Три световых пятна за стеклом">
-            <div className="swatches">{st.bgCustom.map((c, i) => <ColorPick key={i} label={'Пятно ' + (i + 1)} value={c} onChange={(v) => set({ bgCustom: st.bgCustom.map((x, j) => (j === i ? v : x)) as [string, string, string] })} />)}</div>
+          <Row label="Цвет фона" hint="Один цвет на весь фон, в тёмной и светлой теме">
+            <ColorPick label="Цвет фона" value={st.bgCustom[0]} onChange={(v) => set({ bgCustom: [v, v, v] })} />
           </Row>
         )}
-        {st.background === 'clear' ? (
+        {st.background === 'clear' && (
           <Row label="Материал окна" hint="Акрил размывает рабочий стол, но становится плоским, когда окно не в фокусе. Слюда этого не делает">
             <div className="seg">{GLASS_MATERIALS.map((m) => <button key={m} className={st.glassMaterial === m ? 'on' : ''} onClick={() => set({ glassMaterial: m })}>{MATERIAL_LABEL[m]}</button>)}</div>
-          </Row>
-        ) : (
-          <Row label="Движение света" hint="Фоновые пятна медленно плывут. Выключите, если нужна статика">
-            <label className="switch"><input type="checkbox" checked={st.motion} onChange={(e) => set({ motion: e.target.checked })} /><span className="track" /><span className="thumb" /></label>
           </Row>
         )}
         <Row label="Матовость стекла" hint="Сила размытия и плотность панелей">
           <input className="slider" type="range" min={0} max={100} value={st.glass} style={{ ['--p' as string]: st.glass + '%' }} onChange={(e) => set({ glass: Number(e.target.value) })} />
+        </Row>
+        <Row label="Прозрачность панелей" hint="Карточки и блоки на страницах: слева почти прозрачные, справа плотные">
+          <input className="slider" type="range" min={0} max={100} value={st.panelOpacity} style={{ ['--p' as string]: st.panelOpacity + '%' }} onChange={(e) => set({ panelOpacity: Number(e.target.value) })} />
+        </Row>
+        <Row label="Прозрачность меню и шапки" hint="Боковая панель и верхняя полоса">
+          <input className="slider" type="range" min={0} max={100} value={st.barOpacity} style={{ ['--p' as string]: st.barOpacity + '%' }} onChange={(e) => set({ barOpacity: Number(e.target.value) })} />
+        </Row>
+        <Row label="Непрозрачность окон" hint="Диалоги, выпадающие меню, уведомления и карточки прогресса: чем правее, тем плотнее и читаемее">
+          <input className="slider" type="range" min={20} max={100} value={st.popOpacity} style={{ ['--p' as string]: (st.popOpacity - 20) * 1.25 + '%' }} onChange={(e) => set({ popOpacity: Number(e.target.value) })} />
         </Row>
       </div>
 

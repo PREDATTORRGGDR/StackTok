@@ -1,4 +1,5 @@
-import { ReactNode, useEffect } from 'react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 
 export type Person = { id?: string; label: string; avatar?: string }
 
@@ -30,3 +31,30 @@ export function Modal({ children, onClose }: { children: ReactNode; onClose: () 
 
 export const statusText = (a: { session: string; verified: boolean; username?: string }) =>
   a.session === 'logged_in' ? (a.verified ? (a.username ? '@' + a.username : 'Вход выполнен') : 'Нужно подтвердить') : 'Не авторизован'
+
+/** Our own dropdown instead of the native <select>: the system list is white, unthemed and ignores the glass look. */
+export function Select({ value, options, onChange, align = 'left', label }: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void; align?: 'left' | 'right'; label?: string }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const down = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false) }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false) } }
+    window.addEventListener('mousedown', down)
+    window.addEventListener('keydown', key, true)
+    return () => { window.removeEventListener('mousedown', down); window.removeEventListener('keydown', key, true) }
+  }, [open])
+  const cur = options.find((o) => o.value === value)
+  return (
+    <div className="sel" ref={box}>
+      <button type="button" className="sel-btn" aria-haspopup="listbox" aria-expanded={open} aria-label={label} onClick={() => setOpen((o) => !o)}>
+        <span className="sel-cur">{cur?.label ?? '—'}</span><ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className={'sel-list ' + align} role="listbox">
+          {options.map((o) => <button type="button" role="option" aria-selected={o.value === value} key={o.value} className={o.value === value ? 'on' : ''} onClick={() => { setOpen(false); onChange(o.value) }}>{o.label}</button>)}
+        </div>
+      )}
+    </div>
+  )
+}

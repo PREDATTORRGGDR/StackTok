@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Copy, Download, Globe, Layers, LayoutGrid, Minus, Plus, Settings as Cog, Sparkles, Square, Users, X } from 'lucide-react'
-import { ACCENT_COLORS, BG_COLORS } from '@shared/types'
+import { ACCENT_COLORS, BG_SOLID } from '@shared/types'
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
 import { Accounts } from './pages/Accounts'
@@ -44,15 +44,21 @@ function useAppearance(s: AppState | null) {
       root.style.setProperty('--accent-2', toHex(mix(base, 255, light ? 0.22 : 0.38)))
       root.style.setProperty('--accent-rgb', (light ? mix(base, 0, 0.12) : base).join(', '))
       root.style.setProperty('--on-accent', base[0] * 0.299 + base[1] * 0.587 + base[2] * 0.114 > 175 ? '#14161f' : '#fff')
-      const spots = set.background === 'custom' ? set.bgCustom : set.background === 'clear' ? null : BG_COLORS[set.background]
-      ;['--b1', '--b2', '--b3'].forEach((v, i) => spots ? root.style.setProperty(v, spots[i]) : root.style.removeProperty(v))
+      const solid = set.background === 'clear' ? null : set.background === 'custom' ? set.bgCustom[0] : BG_SOLID[set.background][light ? 'light' : 'dark']
+      if (solid) root.style.setProperty('--bg-base', solid); else root.style.removeProperty('--bg-base')
+      const lum = base[0] * 0.299 + base[1] * 0.587 + base[2] * 0.114 // text in the accent colour on plain glass must stay readable (a white accent on white, a black one on black)
+      root.style.setProperty('--accent-ink', toHex(light ? (lum > 140 ? mix(base, 0, 0.55) : mix(base, 0, 0.12)) : lum < 100 ? mix(base, 255, 0.5) : base))
       root.style.setProperty('--blur', 10 + set.glass * 0.4 + 'px')
-      root.style.setProperty('--fill', String((set.background === 'clear' ? (light ? 0.4 : 0.2) + set.glass * 0.003 : light ? 0.42 + set.glass * 0.0035 : 0.035 + set.glass * 0.0012).toFixed(3)))
+      const fill = set.background === 'clear' ? (light ? 0.4 : 0.2) + set.glass * 0.003 : light ? 0.42 + set.glass * 0.0035 : 0.035 + set.glass * 0.0012
+      const dense = (o: number) => String(Math.min(0.97, fill * (0.15 + o * 0.017)).toFixed(3)) // 50 = as designed, 0 = nearly clear, 100 = nearly solid
+      root.style.setProperty('--fill', dense(set.panelOpacity))
+      root.style.setProperty('--fill-bar', dense(set.barOpacity))
+      root.style.setProperty('--pop-a', String(set.popOpacity / 100))
     }
     apply()
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
-  }, [set?.theme, set?.accent, set?.accentColor, set?.background, set?.bgCustom.join(), set?.motion, set?.glass])
+  }, [set?.theme, set?.accent, set?.accentColor, set?.background, set?.bgCustom.join(), set?.motion, set?.glass, set?.panelOpacity, set?.barOpacity, set?.popOpacity])
 }
 
 const PHASES = [['scan', 'Поиск'], ['delete', 'Удаление'], ['verify', 'Проверка']] as const
@@ -112,7 +118,7 @@ function JobCard({ s }: { s: AppState }) {
 const PSY_PHASES = [['collect', 'Сбор'], ['vision', 'Обложки'], ['synth', 'Портрет'], ['save', 'Файл']] as const
 
 /** Floating progress of a repost portrait: steps, a bar over covers read, tokens spent, and the finished file. */
-function PsyCard({ s }: { s: AppState }) {
+function PsyCard({ s, full, onMin }: { s: AppState; full?: boolean; onMin?: () => void }) {
   const j = s.psy!
   const acct = s.accounts.find((a) => a.id === j.accountId)
   const running = j.status === 'running'
@@ -125,8 +131,13 @@ function PsyCard({ s }: { s: AppState }) {
   const at = PSY_PHASES.findIndex(([p]) => p === j.phase)
   const pct = j.phase === 'vision' && j.total ? Math.round((j.done / j.total) * 100) : j.status === 'done' ? 100 : 0
   const icon = running ? <span className="spinner" /> : j.status === 'done' ? <CheckCircle2 size={22} className="ok-ic" /> : <AlertTriangle size={22} className="warn-ic" />
-  return (
-    <div className={'glass jobcard psycard ' + j.status}>
+  useEffect(() => {
+    if (!full) return
+    window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: true })) // the native web view would draw over the overlay
+    return () => { window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: false })) }
+  }, [full])
+  const card = (
+    <div className={'glass jobcard psycard ' + j.status + (full ? ' full' : '')}>
       <div className="row">
         {acct && !j.target && <Avatar a={acct} size={34} />}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -148,15 +159,20 @@ function PsyCard({ s }: { s: AppState }) {
             <button className="btn sm" onClick={() => call('psy:dismiss')}>Закрыть</button>
           </>
         )}
+        {full && running && <button className="btn sm" onClick={onMin}>Свернуть</button>}
       </div>
     </div>
   )
+  return full ? <div className="modal-bg psy-overlay">{card}</div> : card
 }
 
 export function App() {
   const s = useAppState()
   const [page, setPage] = useState<Page | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
+  const [psyFull, setPsyFull] = useState(false) // full-screen progress for an analysis started from the Browse tab
+  const hasPsy = !!s?.psy
+  useEffect(() => { if (!hasPsy) setPsyFull(false) }, [hasPsy])
   const toasts = useToasts()
   useAppearance(s)
 
@@ -235,8 +251,8 @@ export function App() {
         </main>
       </div>
       {s.job && <JobCard s={s} />}
-      {s.psy && <PsyCard s={s} />}
-      {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} />}
+      {s.psy && <PsyCard s={s} full={psyFull} onMin={() => setPsyFull(false)} />}
+      {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} onPsyStarted={() => setPsyFull(true)} />}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={'glass toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
     </>
   )

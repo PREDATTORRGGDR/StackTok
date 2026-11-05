@@ -199,6 +199,9 @@ const handlers: Record<string, Handler> = {
     if (GLASS_MATERIALS.includes(s?.glassMaterial as any)) cur.glassMaterial = s.glassMaterial!
     if (typeof s?.motion === 'boolean') cur.motion = s.motion
     if (typeof s?.glass === 'number' && Number.isFinite(s.glass)) cur.glass = Math.min(100, Math.max(0, Math.round(s.glass)))
+    if (typeof s?.panelOpacity === 'number' && Number.isFinite(s.panelOpacity)) cur.panelOpacity = Math.min(100, Math.max(0, Math.round(s.panelOpacity)))
+    if (typeof s?.barOpacity === 'number' && Number.isFinite(s.barOpacity)) cur.barOpacity = Math.min(100, Math.max(0, Math.round(s.barOpacity)))
+    if (typeof s?.popOpacity === 'number' && Number.isFinite(s.popOpacity)) cur.popOpacity = Math.min(100, Math.max(20, Math.round(s.popOpacity)))
     if (typeof s?.restoreLast === 'boolean') cur.restoreLast = s.restoreLast
     if (typeof s?.muteByDefault === 'boolean') cur.muteByDefault = s.muteByDefault
     if (typeof s?.chatOverlay === 'boolean') cur.chatOverlay = s.chatOverlay
@@ -300,7 +303,7 @@ const handlers: Record<string, Handler> = {
   },
   // The user pressed «Психопортрет»: reads the account's reposts, lets a vision model look at covers and frames, writes a presentation.
   // `username` = analyse any public profile by name (no sign-in needed; `id` only picks which account's browser view sends the requests).
-  'psy:start': async (a: { id: string; username?: string; frames?: boolean; limit?: number }) => {
+  'psy:start': async (a: { id: string; username?: string; frames?: boolean; limit?: number; gender?: string; age?: string; relation?: string }) => {
     const acc = account(a?.id)
     need(psy?.job.status !== 'running', 'Портрет уже строится.')
     const other = typeof a.username === 'string' && a.username.trim() ? parseHandle(a.username) : undefined
@@ -321,7 +324,7 @@ const handlers: Record<string, Handler> = {
     const name = `Психопортрет-${(other || acc.username || acc.label).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').slice(0, 40)}-${stamp}.html`
     const path = devPath || (await dialog.showSaveDialog(win, { title: 'Психопортрет: куда сохранить презентацию', defaultPath: join(app.getPath('downloads'), name), filters: [{ name: 'HTML-презентация', extensions: ['html'] }] })).filePath
     if (!path) return null
-    const limit = typeof a.limit === 'number' && Number.isFinite(a.limit) ? Math.min(1500, Math.max(10, Math.round(a.limit))) : 500
+    const limit = typeof a.limit === 'number' && Number.isFinite(a.limit) ? Math.min(10000, Math.max(10, Math.round(a.limit))) : 500
     const run = { job: { accountId: acc.id, status: 'running', phase: 'collect', done: 0, total: 0, message: 'Подключаюсь к TikTok…', startedAt: Date.now(), tokens: 0, target: other } as PsyJob, stop: false }
     psy = run
     const target = browse.chatTarget(acc.id) ?? (browse.contents(acc.id), browse.chatTarget(acc.id))
@@ -330,7 +333,7 @@ const handlers: Record<string, Handler> = {
       wc: browse.contents(acc.id), ses: browse.contents(acc.id).session, base: new URL(HOME_URL).origin,
       username: !other && acc.verified ? acc.username : undefined, target: other, owner: other ? { name: '@' + other, handle: other } : { name: acc.label, handle: acc.username },
       provider: { kind: pre.kind, base, key: key! }, visionModel: vision, synthModel: synth,
-      devOrigin: DEV ? new URL(HOME_URL).origin : undefined, frames: a.frames === true, limit, job: run.job, onChange: push, cancelled: () => run.stop, path
+      devOrigin: DEV ? new URL(HOME_URL).origin : undefined, frames: a.frames === true, limit, subject: { gender: a.gender === 'male' || a.gender === 'female' ? a.gender : undefined, age: typeof a.age === 'string' ? a.age.trim().slice(0, 20) || undefined : undefined, relation: typeof a.relation === 'string' ? a.relation.trim().slice(0, 40) || undefined : undefined }, job: run.job, onChange: push, cancelled: () => run.stop, path
     }).then((j) => { if (j.status === 'done' && j.path && !devPath) shell.showItemInFolder(j.path) }).finally(() => { target?.release(); push() })
     push()
     return true

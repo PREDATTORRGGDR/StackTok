@@ -3,7 +3,7 @@ import { AppState, call } from '../api'
 import type { Dialog } from '../Dialogs'
 import type { Page } from '../App'
 import { GROUPS, TOOLS, ToolCtx } from '../tools'
-import { Avatar } from '../ui'
+import { Avatar, Select } from '../ui'
 
 /** All features of the app in one place, grouped. What each card does and when it is available comes from the TOOLS list. */
 export function ToolsPage({ s, active, go, openDialog }: { s: AppState; active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void }) {
@@ -13,12 +13,10 @@ export function ToolsPage({ s, active, go, openDialog }: { s: AppState; active?:
       <div className="page-head">
         <div><h2>Инструменты</h2><p>Всё, что приложение умеет делать с аккаунтом TikTok. Каждое действие запускается только вашей кнопкой.</p></div>
         {s.accounts.length > 0 && (
-          <label className="pickacct" title="Аккаунт, с которым работают инструменты">
+          <div className="pickacct" title="Аккаунт, с которым работают инструменты">
             {active && <Avatar a={active} size={24} />}
-            <select value={active?.id ?? ''} onChange={(e) => call('account:select', { id: e.target.value })}>
-              {s.accounts.map((a) => <option key={a.id} value={a.id}>{a.label}{a.username ? ` · @${a.username}` : ''}</option>)}
-            </select>
-          </label>
+            <Select align="right" label="Аккаунт для инструментов" value={active?.id ?? ''} onChange={(id) => call('account:select', { id })} options={s.accounts.map((a) => ({ value: a.id, label: a.label + (a.username ? ` · @${a.username}` : '') }))} />
+          </div>
         )}
       </div>
       {GROUPS.map((g) => {

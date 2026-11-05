@@ -20,13 +20,16 @@ export const ACCENT_COLORS: Record<(typeof ACCENTS)[number], string> = {
   blue: '#4d8dff', violet: '#9b6bff', pink: '#ff5c93', red: '#ff5252', orange: '#ff9340',
   yellow: '#ffc933', lime: '#9be04a', green: '#35d49a', teal: '#1fc2b5', cyan: '#35c7ff'
 }
-export const BACKGROUNDS = ['clear', 'aurora', 'sunset', 'ocean', 'graphite', 'forest', 'rose', 'midnight', 'lavender', 'mint', 'ember', 'mono', 'custom'] as const
-/** Three light spots behind the glass; 'custom' uses the user's own three. */
-export const BG_COLORS: Record<Exclude<(typeof BACKGROUNDS)[number], 'clear' | 'custom'>, [string, string, string]> = {
-  aurora: ['#2f5bff', '#8a3dff', '#00c2c7'], sunset: ['#ff5a7a', '#ff9a3d', '#8d3dff'], ocean: ['#0a84ff', '#00c2c7', '#3d5bff'],
-  graphite: ['#4b5160', '#2a2f3b', '#646c80'], forest: ['#1f9d55', '#0b6e4f', '#9be04a'], rose: ['#ff4d8d', '#c13cff', '#ff9c7a'],
-  midnight: ['#1b2a8f', '#4a1fa8', '#0a5bd1'], lavender: ['#a78bfa', '#f0abfc', '#7dd3fc'], mint: ['#34d399', '#22d3ee', '#a3e635'],
-  ember: ['#ff3d2e', '#ff8a1f', '#b8135c'], mono: ['#ffffff', '#9aa0b0', '#4b5160']
+export const BACKGROUNDS = ['clear', 'graphite', 'black', 'midnight', 'ocean', 'forest', 'wine', 'plum', 'sand', 'custom'] as const
+/** One flat colour behind the glass, a dark and a light variant; 'custom' uses the first colour of `bgCustom` in both themes. */
+export const BG_SOLID: Record<Exclude<(typeof BACKGROUNDS)[number], 'clear' | 'custom'>, { dark: string; light: string }> = {
+  graphite: { dark: '#16181f', light: '#e3e5ea' }, black: { dark: '#000000', light: '#ffffff' }, midnight: { dark: '#0a1130', light: '#dce4fa' },
+  ocean: { dark: '#08202f', light: '#d6ebf7' }, forest: { dark: '#0b2017', light: '#d8f0e3' }, wine: { dark: '#2a0c17', light: '#f7dde5' },
+  plum: { dark: '#1a0e30', light: '#e7ddf8' }, sand: { dark: '#241d14', light: '#f1e7d6' }
+}
+/** Gradients of the chat wallpapers (previews in Settings; the page itself gets them from chat-overlay.ts). */
+export const BG_COLORS: Record<string, [string, string, string]> = {
+  aurora: ['#2f5bff', '#8a3dff', '#00c2c7'], sunset: ['#ff5a7a', '#ff9a3d', '#8d3dff'], ocean: ['#0a84ff', '#00c2c7', '#3d5bff'], graphite: ['#4b5160', '#2a2f3b', '#646c80']
 }
 export const GLASS_MATERIALS = ['acrylic', 'mica', 'tabbed'] as const // native window material of the "Чистое" background
 export const HEX = /^#[0-9a-f]{6}$/i
@@ -52,6 +55,9 @@ export interface Settings {
   glassMaterial: (typeof GLASS_MATERIALS)[number]
   motion: boolean // slowly drifting background light
   glass: number // 0..100, how strong the frosted blur is
+  panelOpacity: number // 0..100, how dense the glass of cards and panels is (50 = default)
+  barOpacity: number // 0..100, the same for the sidebar and the header
+  popOpacity: number // 20..100, how opaque dialogs, menus, toasts and progress cards are
   restoreLast: boolean // reopen the last active account on launch
   muteByDefault: boolean // start every account's page silent
   chatOverlay: boolean // glass styling on TikTok's messages page

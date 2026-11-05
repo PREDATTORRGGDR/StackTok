@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path'
 import { ACCENTS, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, PSY_PRESETS, CHAT_WALLPAPERS, Data, Settings, THEMES } from '../shared/types'
 
-export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'aurora', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal', psyPreset: 'anthropic', psyBase: '', psyVision: '', psySynth: '' }
+export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'graphite', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, panelOpacity: 50, barOpacity: 50, popOpacity: 96, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal', psyPreset: 'anthropic', psyBase: '', psyVision: '', psySynth: '' }
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d)
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -36,6 +36,9 @@ export function sanitize(raw: any): Data {
       glassMaterial: pick(s.glassMaterial, GLASS_MATERIALS, DEFAULT_SETTINGS.glassMaterial),
       motion: s.motion !== false,
       glass: Math.min(100, Math.max(0, num(s.glass) ?? DEFAULT_SETTINGS.glass)),
+      panelOpacity: Math.min(100, Math.max(0, num(s.panelOpacity) ?? DEFAULT_SETTINGS.panelOpacity)),
+      barOpacity: Math.min(100, Math.max(0, num(s.barOpacity) ?? DEFAULT_SETTINGS.barOpacity)),
+      popOpacity: Math.min(100, Math.max(20, num(s.popOpacity) ?? DEFAULT_SETTINGS.popOpacity)),
       restoreLast: s.restoreLast !== false,
       muteByDefault: s.muteByDefault !== false,
       chatOverlay: s.chatOverlay !== false,

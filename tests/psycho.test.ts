@@ -304,3 +304,21 @@ describe('deck', () => {
     expect(esc(`<&>"'`)).toBe('&lt;&amp;&gt;&quot;&#39;')
   })
 })
+
+import { subjectNote } from '../src/main/psycho'
+describe('subjectNote', () => {
+  it('is empty without data and lists what is known', () => {
+    expect(subjectNote()).toBe('')
+    expect(subjectNote({})).toBe('')
+    const t = subjectNote({ gender: 'female', age: '~25', relation: 'подруга' })
+    expect(t).toContain('женский'); expect(t).toContain('~25'); expect(t).toContain('подруга')
+  })
+})
+
+describe('forYou', () => {
+  it('is kept only when the model gave it, and is escaped in the deck', () => {
+    expect(sanitizeReport({}).forYou).toBeNull()
+    const r = sanitizeReport({ forYou: { who: 'девушка', feelings: 'Скучает <b>', nextSteps: ['Написать первой'] } })
+    expect(r.forYou?.nextSteps).toEqual(['Написать первой'])
+  })
+})

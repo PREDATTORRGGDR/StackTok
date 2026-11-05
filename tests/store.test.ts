@@ -6,7 +6,7 @@ describe('store validation', () => {
     for (const raw of [undefined, null, 5, 'x', {}]) {
       const d = sanitize(raw)
       expect(d.accounts).toEqual([])
-      expect(d.settings).toMatchObject({ theme: 'dark', accent: 'blue', background: 'aurora', restoreLast: true })
+      expect(d.settings).toMatchObject({ theme: 'dark', accent: 'blue', background: 'graphite', restoreLast: true })
     }
   })
 
@@ -18,7 +18,7 @@ describe('store validation', () => {
 
   it('clamps and whitelists settings', () => {
     const d = sanitize({ settings: { theme: 'neon', accent: 'pink', glass: 999, background: 'x', restoreLast: false } })
-    expect(d.settings).toMatchObject({ theme: 'dark', accent: 'pink', glass: 100, background: 'aurora', restoreLast: false })
+    expect(d.settings).toMatchObject({ theme: 'dark', accent: 'pink', glass: 100, background: 'graphite', restoreLast: false })
   })
 
   it('defaults and whitelists the chat overlay settings', () => {
