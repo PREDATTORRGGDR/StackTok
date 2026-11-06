@@ -3,7 +3,7 @@ import { AccountView } from '@shared/types'
 import { call } from './api'
 import { Modal } from './ui'
 
-export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'reposts' | 'psy'; acct: AccountView; who?: string; overlay?: boolean }
+export type Dialog = { kind: 'add' } | { kind: 'rename' | 'remove' | 'wipe' | 'reposts' | 'psy' | 'stats'; acct: AccountView; who?: string; overlay?: boolean }
 
 export function Dialogs({ dialog, close, onAdded, onPsyStarted }: { dialog: Dialog; close: () => void; onAdded: () => void; onPsyStarted?: () => void }) {
   const [text, setText] = useState(dialog.kind === 'rename' ? dialog.acct.label : '')
@@ -21,7 +21,6 @@ export function Dialogs({ dialog, close, onAdded, onPsyStarted }: { dialog: Dial
   async function submit() {
     if (dialog.kind === 'add') { if (await call('account:add', { label: text })) { onAdded(); close() } return }
     if (dialog.kind === 'rename') await call('account:rename', { id: dialog.acct.id, label: text })
-    else if (dialog.kind === 'reposts') { if ((await call('reposts:start', { id: dialog.acct.id })) === undefined) return }
     else if (dialog.kind === 'psy') { const r = await call('psy:start', { id: dialog.acct.id, username: other || !signed ? who : undefined, frames, limit, gender: gender || undefined, age, relation }); if (r === undefined) return; if (r === null) return close(); if (dialog.overlay) onPsyStarted?.() }
     else if (dialog.kind === 'remove') await call('account:remove', { id: dialog.acct.id, wipe })
     else await call('account:wipe', { id: dialog.acct.id })
@@ -50,13 +49,6 @@ export function Dialogs({ dialog, close, onAdded, onPsyStarted }: { dialog: Dial
           <span className="muted small">«{dialog.acct.label}» будет разлогинен, cookies, хранилище и кэш очистятся. Сам аккаунт останется в списке.</span>
         </>
       )}
-      {dialog.kind === 'reposts' && (
-        <>
-          <h3>Удалить все репосты?</h3>
-          <span className="muted small">У аккаунта «{dialog.acct.label}»{dialog.acct.username ? ` (@${dialog.acct.username})` : ''} будут убраны все репосты любой давности. Собственные видео, лайки и подписки не затрагиваются. Вернуть репосты автоматически нельзя.</span>
-          <span className="muted small">Можно пользоваться приложением, пока идёт очистка: прогресс будет в углу окна.</span>
-        </>
-      )}
       {dialog.kind === 'psy' && (
         <>
           <h3>Психопортрет по репостам</h3>
@@ -79,8 +71,8 @@ export function Dialogs({ dialog, close, onAdded, onPsyStarted }: { dialog: Dial
       )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 4 }}>
         <button className="btn" onClick={close}>Отмена</button>
-        <button className={'btn primary' + (dialog.kind === 'reposts' ? ' danger-fill' : '')} disabled={(typing && !text.trim()) || (dialog.kind === 'psy' && (other || !signed) && !who.trim())} onClick={submit}>
-          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : dialog.kind === 'reposts' ? 'Удалить репосты' : dialog.kind === 'psy' ? 'Построить портрет' : wipe ? 'Убрать и стереть' : 'Убрать'}
+        <button className="btn primary" disabled={(typing && !text.trim()) || (dialog.kind === 'psy' && (other || !signed) && !who.trim())} onClick={submit}>
+          {dialog.kind === 'add' ? 'Добавить' : dialog.kind === 'rename' ? 'Сохранить' : dialog.kind === 'wipe' ? 'Удалить данные' : dialog.kind === 'psy' ? 'Построить портрет' : wipe ? 'Убрать и стереть' : 'Убрать'}
         </button>
       </div>
     </Modal>

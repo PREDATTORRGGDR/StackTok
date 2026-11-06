@@ -3,6 +3,8 @@ import { AlertTriangle, CheckCircle2, Copy, Download, Globe, Layers, LayoutGrid,
 import { ACCENT_COLORS, BG_SOLID } from '@shared/types'
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
+import { RepostScreen } from './RepostScreen'
+import { StatsDialog } from './StatsDialog'
 import { Accounts } from './pages/Accounts'
 import { ToolsPage } from './pages/Tools'
 import { Browse, progressText } from './pages/Browse'
@@ -65,7 +67,7 @@ const PHASES = [['scan', 'Поиск'], ['delete', 'Удаление'], ['verify
 const clock = (ms: number) => { const t = Math.max(0, Math.round(ms / 1000)); return t >= 60 ? `${Math.floor(t / 60)} мин ${t % 60} с` : `${t} с` }
 
 /** Floating progress of a repost cleanup: steps, a progress bar, counters and time. */
-function JobCard({ s }: { s: AppState }) {
+function JobCard({ s, onOpen }: { s: AppState; onOpen: () => void }) {
   const j = s.job!
   const acct = s.accounts.find((a) => a.id === j.accountId)
   const running = j.status === 'running'
@@ -109,7 +111,8 @@ function JobCard({ s }: { s: AppState }) {
       <div className="muted small">{j.message}</div>
       <div className="row">
         <span className="faint small" style={{ flex: 1 }}>{clock(spent)}{eta && ' · ' + eta}</span>
-        {running ? <button className="btn sm" onClick={() => call('reposts:stop')}><Square size={13} />Остановить</button> : <button className="btn sm" onClick={() => call('reposts:dismiss')}>Закрыть</button>}
+        <button className="btn sm" onClick={onOpen}>Развернуть</button>
+        {running ? <button className="btn sm" onClick={() => call('reposts:stop')}><Square size={13} />Стоп</button> : <button className="btn sm" onClick={() => call('reposts:dismiss')}>Закрыть</button>}
       </div>
     </div>
   )
@@ -171,6 +174,9 @@ export function App() {
   const [page, setPage] = useState<Page | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [psyFull, setPsyFull] = useState(false) // full-screen progress for an analysis started from the Browse tab
+  const [repMin, setRepMin] = useState(false) // repost cleanup folded into the corner card
+  // Everything that used to ask first now opens the search: it only reads, and the choice comes after it.
+  const open = (d: Dialog) => { if (d.kind === 'reposts') { setRepMin(false); call('reposts:start', { id: d.acct.id }) } else setDialog(d) }
   const hasPsy = !!s?.psy
   useEffect(() => { if (!hasPsy) setPsyFull(false) }, [hasPsy])
   const toasts = useToasts()
@@ -242,17 +248,18 @@ export function App() {
             <WinControls maximized={s.maximized} />
           </header>
           <div className={'content' + (page === 'browse' || page === 'downloader' ? ' frame-wrap' : '')}>
-            {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={setDialog} />}
-            {page === 'browse' && <Browse active={active} go={setPage} openDialog={setDialog} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} />}
-            {page === 'tools' && <ToolsPage s={s} active={active} go={setPage} openDialog={setDialog} />}
+            {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={open} />}
+            {page === 'browse' && <Browse active={active} go={setPage} openDialog={open} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} />}
+            {page === 'tools' && <ToolsPage s={s} active={active} go={setPage} openDialog={open} />}
             {page === 'downloader' && <DownloaderPage />}
             {page === 'settings' && <SettingsPage s={s} />}
           </div>
         </main>
       </div>
-      {s.job && <JobCard s={s} />}
+      {s.job && (repMin ? <JobCard s={s} onOpen={() => setRepMin(false)} /> : <RepostScreen s={s} onMin={() => setRepMin(true)} />)}
       {s.psy && <PsyCard s={s} full={psyFull} onMin={() => setPsyFull(false)} />}
-      {dialog && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} onPsyStarted={() => setPsyFull(true)} />}
+      {dialog?.kind === 'stats' && <StatsDialog acct={dialog.acct} close={() => setDialog(null)} />}
+      {dialog && dialog.kind !== 'stats' && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} onPsyStarted={() => setPsyFull(true)} />}
       <div className="toasts">{toasts.map((t) => <div key={t.id} className={'glass toast' + (t.err ? ' err' : '')}>{t.text}</div>)}</div>
     </>
   )

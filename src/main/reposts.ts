@@ -32,15 +32,29 @@ export const whoAmI = async () => {
 
 /** One page of the account's reposts. */
 const listReposts = async ({ secUid, cursor, count }: { secUid: string; cursor: string; count: number }) => {
-  const p = new URLSearchParams({ aid: '1988', count: String(count), coverFormat: '2', cursor, needPinnedItemIds: 'true', post_item_list_request_type: '0', secUid })
+  const q = { aid: '1988', count: String(count), coverFormat: '2', cursor, needPinnedItemIds: 'true', post_item_list_request_type: '0', secUid }
+  // The way the site's own client asks: msToken, browser fields and the page's own signature. Plain is the fallback.
+  const signed = async () => {
+    const p = new URLSearchParams({ ...q, app_name: 'tiktok_web', channel: 'tiktok_web', device_platform: 'web_pc', cookie_enabled: 'true', browser_language: navigator.language, browser_name: 'Mozilla', browser_online: 'true', browser_platform: navigator.platform, os: 'windows', screen_height: String(screen.height), screen_width: String(screen.width), tz_name: Intl.DateTimeFormat().resolvedOptions().timeZone, focus_state: 'true', is_page_visible: 'true', msToken: document.cookie.match(/(?:^|; )msToken=([^;]+)/)?.[1] ?? '' })
+    const s = await (window as any).byted_acrawler?.frontierSign?.({ url: location.origin + '/api/repost/item_list/?' + p })
+    for (const k of Object.keys(s ?? {})) p.set(k, s[k])
+    return '/api/repost/item_list/?' + p
+  }
   try {
-    const r = await fetch('/api/repost/item_list/?' + p, { credentials: 'include' })
-    const j = await r.json().catch(() => null)
+    let url = '/api/repost/item_list/?' + new URLSearchParams(q)
+    try { url = await signed() } catch {}
+    let r = await fetch(url, { credentials: 'include' })
+    let text = await r.text()
+    if (!text.trim() && url.includes('msToken')) { r = await fetch('/api/repost/item_list/?' + new URLSearchParams(q), { credentials: 'include' }); text = await r.text() }
+    let j: any = null
+    try { j = JSON.parse(text) } catch {}
+    const items = ((j && j.itemList) || []).map((x: any) => ({ id: String(x.id), author: (x.author && x.author.uniqueId) || (typeof x.author === 'string' ? x.author : ''), time: Number(x.createTime) || 0, photo: !!x.imagePost }))
     return {
       http: r.status,
       code: j ? (j.status_code ?? 0) : -1,
       msg: (j && j.status_msg) || '',
-      ids: ((j && j.itemList) || []).map((x: any) => String(x.id)),
+      ids: items.map((x: { id: string }) => x.id),
+      items,
       hasMore: !!(j && j.hasMore),
       cursor: j && j.cursor != null ? String(j.cursor) : cursor
     }
@@ -51,7 +65,16 @@ const listReposts = async ({ secUid, cursor, count }: { secUid: string; cursor: 
 
 const unrepost = async (id: string) => {
   try {
-    const r = await fetch(`/tiktok/v1/upvote/delete?aid=1988&item_id=${encodeURIComponent(id)}`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: '' })
+    // The same request as UnRepost and tiktokRepostRemover, signed by the page the way Repost Sweep does; plain when the page has no signer.
+    const csrf = document.cookie.match(/(?:^|;\s*)(?:tt_csrf_token|csrf_session_id)=([^;]+)/)?.[1]
+    const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' }
+    if (csrf) headers['tt-csrf-token'] = csrf
+    const p = new URLSearchParams({ aid: '1988', item_id: id, app_name: 'tiktok_web', channel: 'tiktok_web', device_platform: 'web_pc', from_page: 'user', msToken: document.cookie.match(/(?:^|; )msToken=([^;]+)/)?.[1] ?? '' })
+    try {
+      const s = await (window as any).byted_acrawler?.frontierSign?.({ url: location.origin + '/tiktok/v1/upvote/delete?' + p })
+      for (const k of Object.keys(s ?? {})) p.set(k, s[k])
+    } catch {}
+    const r = await fetch('/tiktok/v1/upvote/delete?' + p, { method: 'POST', credentials: 'include', headers, body: '' })
     const text = await r.text()
     let j: any = null
     try { j = JSON.parse(text) } catch {}
@@ -79,10 +102,10 @@ export async function js<T>(wc: WebContents, fn: Function, arg?: unknown): Promi
 }
 
 /**
- * Removes all reposts of an account from its own TikTok page. Checks first that the session belongs to the confirmed username.
- * `cleaner` is set as soon as the job starts, so the caller can stop it.
+ * Searches the account's reposts from its own TikTok page. Checks first that the session belongs to the confirmed username.
+ * `onCleaner` gets the engine as soon as it exists: the caller can stop it, and later call `remove` with the user's choice.
  */
-export async function cleanAccount(
+export async function findReposts(
   job: Job, username: string | undefined, base: string, wc: WebContents, onChange: () => void, onCleaner: (c: RepostCleaner) => void
 ): Promise<Job> {
   const fail = (message: string) => { Object.assign(job, { status: 'stopped', message, finishedAt: Date.now() }); onChange(); return job }
@@ -98,7 +121,7 @@ export async function cleanAccount(
     }
     const cleaner = new RepostCleaner(api, job, onChange)
     onCleaner(cleaner)
-    return await cleaner.run()
+    return await cleaner.find()
   } catch (e) {
     return fail(`Ошибка: ${(e as Error).message}`)
   }

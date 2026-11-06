@@ -322,6 +322,8 @@ export interface Opts { limit: number; frames: boolean; visionModel?: string; sy
 export interface Analysis { items: RepostItem[]; notes: Map<number, Note>; covers: Map<number, Cover>; stats: Stats; report: Report; warnings: string[]; usage: Vlm['usage'] }
 
 /** Pages through the reposts list: through empty pages while TikTok says `hasMore`, stops on a stuck cursor. */
+const LIST_STEP = 30
+
 export async function collect(d: Deps, limit: number, warnings: string[]): Promise<RepostItem[]> {
   const seen = new Set<string>()
   const items: RepostItem[] = []
@@ -343,9 +345,17 @@ export async function collect(d: Deps, limit: number, warnings: string[]): Promi
     for (const it of r.items) if (it.id && !seen.has(it.id)) { seen.add(it.id); items.push(it); fresh++ }
     d.progress({ phase: 'collect', done: items.length, total: 0, message: `Собираю репосты: ${items.length}` })
     empties = fresh ? 0 : empties + 1
-    if (!r.hasMore) break
+    if (!r.hasMore) {
+      // TikTok sometimes says "no more" in the middle of the list, so the next page has to agree.
+      const next = String(Number(cursor) + LIST_STEP)
+      if (!Number.isFinite(Number(cursor))) break
+      const after = await d.page(next)
+      if (after.http !== 200 || after.code !== 0 || (!after.hasMore && !after.items.length)) break
+      cursor = next
+      continue
+    }
     same = r.cursor === cursor ? same + 1 : 0
-    if (same >= 2 || empties >= 50) { warnings.push('Список репостов остановился раньше конца (курсор не двигается).'); break }
+    if (same >= 2 || empties >= 3000) { warnings.push('Список репостов остановился раньше конца (курсор не двигается).'); break }
     cursor = r.cursor
   }
   if (items.length >= limit) warnings.push(`Взяты ${limit} самых свежих репостов, остальные пропущены.`)

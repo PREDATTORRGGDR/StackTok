@@ -433,6 +433,7 @@ try {
   await api('reposts:start', { id: acctR })
   await clickNav('Аккаунты')
   await until(async () => { const j = (await state()).job; return j && (j.phase !== 'scan' || j.status !== 'running') }, 15000, 'repost scan end')
+  await api('reposts:delete', {})
   await shot('reposts-running')
   const job18 = await until(async () => { const j = (await state()).job; return j && j.status !== 'running' && j }, 60000, 'repost cleanup end')
   await shot('reposts-done')

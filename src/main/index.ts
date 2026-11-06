@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, SessionState, Settings, THEMES } from '../shared/types'
-import { Browse, HOME_URL, configureSession, sessionState, startUrl } from './browse'
+import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
+import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
+import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
 import { ChatDump, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
 import type { RepostCleaner } from './repost-cleaner'
-import { cleanAccount } from './reposts'
+import { findReposts } from './reposts'
 import { parseHandle, profileOf } from './psycho'
 import { KeyBox, runPortrait } from './psycho-run'
 import { Downloader } from './downloader'
@@ -42,7 +44,20 @@ const sessions = new Map<string, SessionState>()
 const watched = new Set<string>()
 async function refreshSession(id: string) {
   const next = await sessionState(id)
-  if (sessions.get(id) !== next) { sessions.set(id, next); push() }
+  if (sessions.get(id) !== next) {
+    sessions.set(id, next)
+    push()
+    if (next === 'logged_in') refreshAvatar(id)
+  }
+}
+// One plain page request per account (no rendering), at most every AVATAR_EVERY: at start, on opening the account and once an hour.
+const avatarAt = new Map<string, number>()
+async function refreshAvatar(id: string | undefined) {
+  const acc = store.data.accounts.find((x) => x.id === id)
+  if (!acc?.verified || sessions.get(acc.id) !== 'logged_in' || Date.now() - (avatarAt.get(acc.id) ?? 0) < AVATAR_EVERY) return
+  avatarAt.set(acc.id, Date.now())
+  const avatar = pickAvatar(await accountPage(acc.id), acc.username)
+  if (avatar && avatar !== acc.avatar) { acc.avatar = avatar; store.save(); push() }
 }
 function watchSession(id: string) {
   if (watched.has(id)) return
@@ -87,6 +102,7 @@ function select(id: string | undefined) {
   browse.show(id)
   store.save()
   push()
+  refreshAvatar(id)
 }
 
 function stopReposts() {
@@ -118,6 +134,23 @@ const handlers: Record<string, Handler> = {
     account(a.id).label = a.label.trim()
     store.save(); push()
   },
+  // The user opened the statistics window: read-only requests with the account's own session.
+  'stats:profile': (a: { id: string }) => {
+    const acc = account(a?.id)
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    return accountProfile(acc.id, acc.verified ? acc.username : undefined)
+  },
+  'stats:reposts': (a: { id: string }) => {
+    const acc = account(a?.id)
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    return accountReposts(acc.id, acc.verified ? acc.username : undefined)
+  },
+  'stats:videos': (a: { id: string }) => {
+    const acc = account(a?.id)
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    return accountVideos(acc.id, acc.verified ? acc.username : undefined)
+  },
+  'stats:stop': (a: { id: string }) => stopCounting(account(a?.id).id),
   'account:detect': (a: { id: string }) => browse.detectIdentity(account(a?.id).id),
   // The user confirms which TikTok account this session belongs to; we never assume it.
   'account:confirm': (a: { id: string; username?: string; avatar?: string }) => {
@@ -126,6 +159,7 @@ const handlers: Record<string, Handler> = {
     acc.avatar = typeof a.avatar === 'string' && /^https:\/\//.test(a.avatar) ? a.avatar : acc.avatar
     acc.verified = true
     store.save(); push()
+    refreshAvatar(acc.id)
   },
   // Removing keeps the stored browser profile unless `wipe` is explicitly set.
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
@@ -286,10 +320,20 @@ const handlers: Record<string, Handler> = {
       stop: false
     }
     reposts = run
-    void cleanAccount(run.job, acc.verified ? acc.username : undefined, new URL(HOME_URL).origin, browse.contents(acc.id), push, (c) => {
+    void findReposts(run.job, acc.verified ? acc.username : undefined, new URL(HOME_URL).origin, browse.contents(acc.id), push, (c) => {
       run.cleaner = c
       if (run.stop) c.stop()
     }).finally(push)
+    push()
+    return true
+  },
+  // The user looked at what the search found and chose how many to remove; no number = all of them.
+  'reposts:delete': (a: { count?: number }) => {
+    const run = reposts
+    need(run?.job.status === 'ready' && !!run.cleaner, 'Сначала дождитесь конца поиска.')
+    const n = a?.count
+    need(n === undefined || (Number.isInteger(n) && n > 0), 'Укажите, сколько удалить.')
+    void run!.cleaner!.remove(n).finally(push)
     push()
     return true
   },
@@ -393,6 +437,7 @@ app.whenReady().then(() => {
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()
+  setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
 app.on('before-quit', () => store?.flush())

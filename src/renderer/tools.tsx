@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { Clapperboard, Download, FileDown, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
+import { BarChart3, Clapperboard, Download, FileDown, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call, toast } from './api'
 import type { Dialog } from './Dialogs'
@@ -27,6 +27,12 @@ export interface Tool {
 const needLogin = (c: ToolCtx) => (!c.acct ? 'Выберите аккаунт' : c.acct.session !== 'logged_in' ? 'Сначала войдите в аккаунт' : null)
 
 export const TOOLS: Tool[] = [
+  {
+    id: 'stats', group: 'Анализ', title: 'Статистика аккаунта', icon: <BarChart3 size={20} />,
+    desc: 'Когда создан аккаунт, подписчики, лайки, видео, репосты, избранное и забавные цифры вроде лайков в день. Собирается за пару секунд.',
+    blocked: needLogin,
+    run: (c) => c.openDialog({ kind: 'stats', acct: c.acct! })
+  },
   {
     id: 'psy', group: 'Анализ', title: 'Психопортрет по репостам', icon: <Sparkles size={20} />,
     desc: 'Любой профиль по @имени или ссылке (вход не нужен) или свой аккаунт: нейросеть читает обложки и подписи репостов и собирает презентацию: черты, настроение, мысли, чувства, интересы.',

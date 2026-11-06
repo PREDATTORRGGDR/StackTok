@@ -83,16 +83,31 @@ export interface Bounds { x: number; y: number; width: number; height: number }
 /** Progress of a repost cleanup, pushed to the UI with every change. */
 export interface Job {
   accountId: string
-  status: 'running' | 'done' | 'stopped'
+  status: 'running' | 'ready' | 'done' | 'stopped' // ready = search finished, waiting for the user to choose how many to remove
   phase: 'scan' | 'delete' | 'verify'
   pass?: number // delete passes so far; each one ends with a rescan from the start
   found: number // every repost seen on the profile so far
-  removed: number
+  removed: number // gone from the list; TikTok's delete reply does not count
   failed: number
+  returned?: number // sent, but the list still showed them
+  target?: number // how many the user chose
+  summary?: RepostSummary
   message: string
   startedAt: number
   deleteStartedAt?: number // for the time-left estimate
   finishedAt?: number
+}
+
+/** What the repost search found. */
+export interface RepostSummary {
+  total: number // real videos TikTok gives out
+  entries: number // places in the list, unavailable videos included
+  authors: number
+  photos: number
+  newest?: number // ms, by the video's own date
+  oldest?: number
+  top: { name: string; count: number }[]
+  years: { year: number; count: number }[]
 }
 
 /** Progress of a running chat export: messages loaded and read, then files saved, then the file written. */
@@ -111,4 +126,52 @@ export interface PsyJob {
   path?: string // where the finished presentation was saved
   target?: string // @name of a profile that is not one of the app's accounts
   tokens: number
+}
+
+/** What the account statistics window shows. Never holds contact details or session values. */
+export interface AccountStats {
+  username: string
+  nickname?: string
+  signature?: string
+  region?: string
+  privateAccount?: boolean
+  createdAt?: number // ms
+  age?: string // «4 года 8 месяцев»
+  days?: number
+  followers?: number
+  following?: number
+  friends?: number
+  likes?: number // received on the account's videos
+  videos?: number
+  liked?: number // given by the account
+  saved?: number
+  likesPerVideo?: number
+  likedPerDay?: number
+  followRatio?: number
+  verified?: boolean
+  favoritesOpen?: boolean
+  organization?: boolean
+  seller?: boolean
+  language?: string
+  nameChangedAt?: number // ms
+  nickChangedAt?: number // ms
+  ms: number // how long collecting took
+}
+
+export interface RepostCount {
+  visible: number // real videos TikTok gives out now
+  entries: number // places in the list, unavailable videos included
+  complete: boolean
+}
+
+/** What the account's own videos collected. */
+export interface VideoTotals {
+  count: number
+  views: number
+  likes: number
+  comments: number
+  shares: number
+  saves: number
+  best: number // views of the most watched video
+  complete: boolean
 }

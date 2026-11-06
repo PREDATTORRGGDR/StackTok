@@ -36,6 +36,16 @@ export async function sessionState(accountId: string): Promise<SessionState> {
   return cookies.length ? 'logged_in' : 'logged_out'
 }
 
+/** The HTML of TikTok's feed page, fetched from main with the account's session: nothing is rendered or run. Null on any failure, never retried. */
+export async function accountPage(accountId: string): Promise<string | null> {
+  try {
+    const r = await session.fromPartition(partitionFor(accountId)).fetch(new URL('/foryou', HOME_URL).href, { credentials: 'include' })
+    return r.ok ? await r.text() : null
+  } catch {
+    return null
+  }
+}
+
 /** Applies hardened navigation rules to any TikTok-facing webContents. */
 export function lockDown(wc: Electron.WebContents) {
   wc.setWindowOpenHandler(({ url }) => {

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dist": "electron-vite build && electron-builder --win",
+    "dist:share": "electron-vite build && electron-builder --win nsis --x64 --arm64 -c.compression=maximum -c.directories.output=release/share",
     "test:e2e": "node tests/e2e.mjs"
   },
   "dependencies": {
