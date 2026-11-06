@@ -63,14 +63,14 @@ export function judgeDelete(r: DeleteReply): Verdict {
   return 'ok'
 }
 
-function judgeList(r: ListReply): 'ok' | 'slow' {
+export function judgeList(r: Pick<ListReply, 'http' | 'code' | 'msg'>): 'ok' | 'slow' {
   if (r.http === 429 || r.http === 503 || r.code === 10202 || r.code === 429) return 'slow'
   if (r.http === 401 || r.http === 403) throw new Fatal(`TikTok ответил ${r.http}`)
   if (r.code === 10214 || CAPTCHA.test(r.msg)) throw new Fatal(r.msg || 'TikTok просит пройти проверку')
   if (r.http === 200 && r.code === 0) return 'ok'
   if (r.http === 200 && r.code === -1) return 'slow' // an empty 200 is TikTok's quiet refusal: the list is not empty, it is withheld
   if (LIMIT.test(r.msg)) return 'slow'
-  throw new Error(`список репостов недоступен (${r.http ? `код ${r.code}` : 'нет ответа'}${r.msg ? ': ' + r.msg : ''})`)
+  throw new Error(`список недоступен (${r.http ? `код ${r.code}` : 'нет ответа'}${r.msg ? ': ' + r.msg : ''})`)
 }
 
 /** What the first screen shows about the found reposts. */

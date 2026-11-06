@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Field, HistoryPage, ImMessage, decode, encode, get, historyOf, historyRequest, parseHistory, parseRequest, sub, text, vint, bytes } from '../src/main/chat-api'
-import { Fatal, PAGE, isHidden, pullHistory, toEntries, toMs } from '../src/main/chat-history'
+import { Fatal, PAGE, pullHistory, pullRecent, selectRange, toEntries, toMs } from '../src/main/chat-history'
+import { cleanRange } from '../src/shared/types'
 
 // A small seeded generator, so the "random" chats are the same on every run.
 function rng(seed: number) {
@@ -130,6 +131,42 @@ describe('pullHistory', () => {
   })
 })
 
+describe('export range', () => {
+  it('cleanRange keeps good ranges and falls back to all', () => {
+    expect(cleanRange({ mode: 'last', count: 100.7 })).toEqual({ mode: 'last', count: 100 })
+    expect(cleanRange({ mode: 'last', count: 0 })).toEqual({ mode: 'all' })
+    expect(cleanRange({ mode: 'last', count: 'x' })).toEqual({ mode: 'all' })
+    expect(cleanRange({ mode: 'time' })).toEqual({ mode: 'all' })
+    expect(cleanRange({ mode: 'time', from: 5e11, to: 4e11 })).toEqual({ mode: 'time', from: 4e11, to: 5e11 })
+    expect(cleanRange({ mode: 'time', from: 5e11 })).toEqual({ mode: 'time', from: 5e11, to: undefined })
+    expect(cleanRange(null)).toEqual({ mode: 'all' })
+  })
+  it('pullRecent stops after the pages that cover the last N and selectRange cuts exactly N', async () => {
+    const all = positions(2000, 5)
+    const s = server(all)
+    const r = await pullRecent(s.ask, { cancelled: () => false, enough: (_p, total) => total >= 120 })
+    expect(s.calls.length).toBe(3)
+    const got = selectRange(r.messages, { mode: 'last', count: 120 })
+    expect(idx({ messages: got })).toEqual(all.slice(-120))
+  })
+  it('pullRecent reaches back to a time and selectRange keeps only that span', async () => {
+    const all = positions(500, 9)
+    const s = server(all)
+    const t = (i: bigint) => toMs(1700000000000n + (i % 1000n))
+    const from = t(all[300])
+    const r = await pullRecent(s.ask, { cancelled: () => false, enough: (page) => page.some((m) => toMs(m.time) < from) })
+    const got = selectRange(r.messages, { mode: 'time', from })
+    expect(got.every((m) => toMs(m.time) >= from)).toBe(true)
+    expect(got.length).toBeGreaterThan(0)
+    expect(s.calls.length).toBeLessThan(11)
+  })
+  it('pullRecent on a short chat returns all of it', async () => {
+    const all = positions(30, 2)
+    const r = await pullRecent(server(all).ask, { cancelled: () => false, enough: () => false })
+    expect(idx(r)).toEqual(all)
+  })
+})
+
 describe('requests built on a request of the page', () => {
   const envelope = (cmd: number, body: Field[]) => encode([vint(1, cmd), vint(2, 10001), text(3, '1.8.4'), text(4, ''), vint(5, 3), vint(6, 0), text(7, 'abc:master'), sub(8, [bytes(cmd, encode(body))]), text(9, 'dev-123'), text(11, 'web'),
     sub(15, [text(1, 'aid'), text(2, '1988')]), sub(15, [text(1, 'Web-Sdk-Ms-Token'), text(2, 'tok')]), vint(18, 1), vint(77, 5)])
@@ -212,13 +249,17 @@ describe('toEntries', () => {
     expect(x.video).toMatchObject({ href: 'https://www.tiktok.com/@/video/7400000000000000002', text: 'Комментарий Ann: nice', cover: { src: 'https://p16.example.com/v.jpg' } })
     expect(x.side).toBe('them')
   })
-  it('shows system notices from TikTok, and leaves out the hidden markers', () => {
-    const e = toEntries([m(1, 0, '{"template":"You are now friends","tips":[]}', { type: 1 }), m(2, 11, '{"hack":"x"}', { type: 1805 }), m(3, 11, '{"text":"hi"}')], { own: '11' })
-    const x = msgs(e)
-    expect(x).toHaveLength(2)
-    expect(x[0]).toMatchObject({ side: 'unknown', author: 'TikTok', text: 'You are now friends' })
-    expect(isHidden(m(2, 11, '{}', { type: 1805 }))).toBe(true)
-    expect(isHidden(m(3, 11, '{}'))).toBe(false)
+  it('shows system notices from TikTok as service lines', () => {
+    const [x] = msgs(toEntries([m(1, 0, '{"template":"You are now friends","tips":[]}', { type: 1 })], { own: '11' }))
+    expect(x).toMatchObject({ side: 'unknown', author: 'TikTok', text: 'You are now friends', service: true })
+  })
+  it('never drops a message: a card with only a {"hack"} content gets an entry', () => {
+    const e = msgs(toEntries([m(1, 11, '{"hack":"x"}', { type: 1805 }), m(2, 11, '{"hack":"1"}', { type: 1813 }), m(3, 11, '{"hack":"1"}', { type: 7777 }), m(4, 11, '{"text":"hi"}')], { own: '11' }))
+    expect(e).toHaveLength(4)
+    expect(e[0].media[0]).toMatchObject({ kind: 'sticker', src: '', note: 'TikTok не прислал данные стикера' })
+    expect(e[1].media[0]).toMatchObject({ kind: 'audio', src: '' })
+    expect(e[2]).toMatchObject({ unknown: true, tag: 'Неизвестный тип · тип 7777' })
+    expect(e[2].rawText).toContain('hack')
   })
   it('keeps what it does not know in the details, and does not repeat what every message has', () => {
     const boring = { 's:mode': '0', 'im_callback_status_code': '0', 's:client_message_id': 'x', source_aid: '1988', 'a:entrance_type': '1' }
@@ -230,12 +271,137 @@ describe('toEntries', () => {
     expect(odd.rawText).toContain('hello')
     expect(odd.outline).toContain('18,24')
   })
-  it('shows reactions from field 15 with who reacted, and keeps them out of the details', () => {
-    const react = (who: number) => bytes(15, encode([text(1, 'e:love'), sub(2, [sub(1, [vint(1, who), vint(2, 1700000000)])])]))
-    const c = { ...m(1, 11, '{"text":"hi"}', { other: [react(22), react(11)] }), conversationId: '0:1:11:22' }
-    const [x] = msgs(toEntries([c], { own: '11' }))
-    expect(x.reactions).toEqual(['❤️ · собеседник', '❤️ · вы'])
-    expect(x.rawText).toBe('')
+  describe('reactions', () => {
+    // as the server sends them: a map entry per key, each with the list of who set it
+    const prop = (key: string, ...who: number[]) => sub(15, [text(1, key), sub(2, who.map((u, i) => sub(1, [vint(1, u), text(2, 'sec'), vint(3, 1700000000 + i), text(4, 'idem')])))])
+    const of = (other: Field[], ctx: { own?: string } = { own: '11' }) => msgs(toEntries([m(1, 11, '{"text":"hi"}', { other }), m(2, 22, '{"text":"yo"}')], ctx))[0]
+    const short = (x: ReturnType<typeof of>) => x.reactions.map((r) => [r.emoji, r.count, r.who.join(', ')])
+
+    it('counts a reaction once although TikTok writes it under two keys', () => {
+      const x = of([prop('e:love', 22), prop('e:💔', 22)])
+      expect(short(x)).toEqual([['💔', 1, 'собеседник']])
+      expect(x.rawText).toBe('')
+    })
+    it('shows the plain like as a heart, once for the same person', () => {
+      expect(short(of([prop('e:love', 22)]))).toEqual([['❤️', 1, 'собеседник']])
+      expect(short(of([prop('e:love', 22), prop('e:\u2764\uFE0F', 22)]))).toEqual([['❤️', 1, 'собеседник']])
+    })
+    it('joins both sides under one emoji with the count', () => {
+      expect(short(of([prop('e:love', 22, 11), prop('e:😂', 22, 11)]))).toEqual([['😂', 2, 'вы, собеседник']])
+    })
+    it('keeps different emoji of different people apart', () => {
+      expect(short(of([prop('e:love', 22, 11), prop('e:😂', 22)]))).toEqual([['😂', 1, 'собеседник'], ['❤️', 1, 'вы']].reverse())
+    })
+    it('does not repeat a person who is listed twice, or a key sent twice', () => {
+      expect(short(of([prop('e:💔', 22, 22), prop('e:💔', 22)]))).toEqual([['💔', 1, 'собеседник']])
+    })
+    it('keeps a key it does not know as a badge with the code', () => {
+      const [r] = of([prop('e:wow', 22)]).reactions
+      expect(r).toMatchObject({ emoji: '🏷️', code: 'wow', count: 1, who: ['собеседник'] })
+      expect(of([prop('s:pin', 11)]).reactions[0]).toMatchObject({ code: 's:pin', who: ['вы'] })
+    })
+    it('tells who reacted from the sides worked out on the page too', () => {
+      const c = { sides: new Map<string, 'me' | 'them'>([['11', 'me'], ['22', 'them']]) }
+      expect(msgs(toEntries([m(1, 11, '{"text":"hi"}', { other: [prop('e:💔', 22)] })], c))[0].reactions[0].who).toEqual(['собеседник'])
+      expect(msgs(toEntries([m(1, 11, '{"text":"hi"}', { other: [prop('e:💔', 22)] })], {}))[0].reactions[0].who).toEqual(['неизвестно'])
+    })
+  })
+  describe('cards', () => {
+    const image = (urls: string[], o: Field[] = []) => [...urls.map((u) => text(2, u)), ...o]
+    const content = (card: number, ...f: Field[]) => sub(20, [sub(card, f)])
+    const KEY = 'ab'.repeat(32)
+
+    it('shows a sticker from its card (type 1805), with every copy of the file', () => {
+      const card = content(7, sub(1, image(['https://p16.example.com/s.heic', 'https://p16.example.com/s.webp'], [text(4, 'Кот'), sub(5, [vint(1, 200), vint(2, 180)])])), sub(200, [sub(1, [sub(2, [text(1, 'a:sticker_type'), text(2, '2')])])]))
+      const [x] = msgs(toEntries([m(1, 22, '{"hack":"1"}', { type: 1805, other: [card] })], { own: '11' }))
+      expect(x.media).toHaveLength(1)
+      expect(x.media[0]).toMatchObject({ kind: 'sticker', src: 'https://p16.example.com/s.webp', label: 'Кот', animated: true, width: 200, height: 180 })
+      expect(x.media[0].alts?.[0].src).toBe('https://p16.example.com/s.heic')
+      expect(x.side).toBe('them')
+      expect(x.unknown).toBeUndefined()
+    })
+    it('says why a sticker without an address is not saved, and keeps its caption', () => {
+      const card = content(7, sub(1, [text(1, 'id')]), sub(2, [sub(2, [text(1, '[Стикер]')])]))
+      const [x] = msgs(toEntries([m(1, 22, '{"hack":"1"}', { type: 1805, other: [card] })], { own: '11' }))
+      expect(x.media[0]).toMatchObject({ kind: 'sticker', src: '', label: '[Стикер]' })
+      expect(x.media[0].note).toContain('нет адреса')
+    })
+    it('reads the old sticker type (5) from its JSON', () => {
+      const [x] = msgs(toEntries([m(1, 22, JSON.stringify({ url: { url_list: ['https://p16.example.com/e.png'] }, width: 100, height: 50 }), { type: 5 })], { own: '11' }))
+      expect(x.media[0]).toMatchObject({ kind: 'sticker', src: 'https://p16.example.com/e.png', width: 100, height: 50 })
+    })
+    it('takes a voice message from the files of the message (type 1813)', () => {
+      const file = sub(24, [text(1, 'uri'), vint(2, 3), text(3, KEY), sub(20, [text(1, 'origin'), text(2, 'https://v16.example.com/a.m4a'), vint(22, 7)])])
+      const [x] = msgs(toEntries([m(1, 22, '{"hack":"1"}', { type: 1813, other: [content(14, sub(102, [sub(2, [text(1, 'Голосовое')])])), file] })], { own: '11' }))
+      expect(x.media[0]).toMatchObject({ kind: 'audio', src: 'https://v16.example.com/a.m4a', label: 'Голосовое' })
+      expect(x.media[0].secret?.key).toBe(KEY)
+      expect(x.rawText).not.toContain(KEY)
+    })
+    it('finds a voice message whose address sits in the video model', () => {
+      const model = JSON.stringify({ video_list: [{ main_url: Buffer.from('https://v16.example.com/b.mp4').toString('base64') }] })
+      const file = sub(24, [vint(2, 3), sub(20, [text(3, model)])])
+      expect(msgs(toEntries([m(1, 22, '', { type: 1813, other: [file] })], { own: '11' }))[0].media[0].src).toBe('https://v16.example.com/b.mp4')
+    })
+    it('reads a photo with its key, the fallbacks in order, and hides the key from the details', () => {
+      const card = content(4, sub(1, image(['https://p.example.com/big'], [text(6, KEY), sub(5, [vint(1, 400), vint(2, 300)])])), sub(2, image(['https://p.example.com/small'], [text(6, KEY)])))
+      const [x] = msgs(toEntries([m(1, 11, '{"hack":"1"}', { type: 1802, other: [card] })], { own: '11' }))
+      expect(x.media[0]).toMatchObject({ kind: 'image', src: 'https://p.example.com/big', width: 400, height: 300 })
+      expect(x.media[0].secret).toMatchObject({ key: KEY, mint: true })
+      expect(x.media[0].secret?.user).toMatch(/^[\da-f]{32}$/)
+      expect(x.media[0].alts?.[0].src).toBe('https://p.example.com/small')
+      expect(x.rawText).not.toContain(KEY)
+    })
+    it('reads a sent video from its model, and falls back to the cover', () => {
+      const model = JSON.stringify({ video_list: [{ main_url: 'https://v.example.com/v.mp4' }] })
+      const [a] = msgs(toEntries([m(1, 11, '{}', { type: 1803, other: [content(5, sub(1, [text(4, model)]))] })], { own: '11' }))
+      expect(a.media[0]).toMatchObject({ kind: 'video', src: 'https://v.example.com/v.mp4' })
+      const [b] = msgs(toEntries([m(2, 11, '{}', { type: 1803, other: [content(5, sub(1, [sub(3, image(['https://v.example.com/c.jpg']))]))] })], { own: '11' }))
+      expect(b.media[0]).toMatchObject({ kind: 'image', src: 'https://v.example.com/c.jpg' })
+      expect(b.media[0].note).toContain('обложка')
+    })
+    it('shows the texts and pictures of a card it has no special case for', () => {
+      const card = sub(20, [sub(100, [sub(1, [text(1, 'title'), sub(2, [text(1, 'Заголовок')])]), sub(2, [text(1, 'pic'), sub(2, image(['https://p.example.com/x.png']))]), sub(3, [text(1, 'go'), sub(2, [text(1, 'https://www.tiktok.com/x')])])])])
+      const [x] = msgs(toEntries([m(1, 22, '{}', { type: 1900, other: [card] })], { own: '11' }))
+      expect(x.text).toBe('Заголовок')
+      expect(x.media[0].src).toBe('https://p.example.com/x.png')
+      expect(x.links[0].href).toBe('https://www.tiktok.com/x')
+      expect(x.tag).toBe('Карточка')
+    })
+  })
+  describe('other kinds of messages', () => {
+    const ref = (id: number, status = 0, hint = '') => sub(18, [vint(1, id), text(2, hint), vint(3, 7), vint(4, status)])
+
+    it('quotes the message a reply points to, with a link to it', () => {
+      const e = msgs(toEntries([m(1, 22, '{"text":"вопрос"}'), m(2, 11, '{"text":"ответ"}', { other: [ref(1)] })], { own: '11' }))
+      expect(e[1]).toMatchObject({ text: 'ответ', reply: 'вопрос', replyTo: 1 })
+    })
+    it('falls back to the hint of a quote that is not in the file, and says when it is gone', () => {
+      const hint = JSON.stringify({ refmsg_uid: '11', refmsg_type: 7, content: '{"text":"раньше"}' })
+      const [a] = msgs(toEntries([m(1, 22, '{"text":"да"}', { other: [ref(99, 0, hint)] })], { own: '11' }))
+      expect(a).toMatchObject({ reply: 'раньше', replyWho: 'Ответ: вы' })
+      expect(a.replyTo).toBeUndefined()
+      expect(msgs(toEntries([m(1, 22, '{"text":"да"}', { other: [ref(99, 3)] })], { own: '11' }))[0].reply).toBe('Сообщение удалено')
+    })
+    it('names a story or a video the message replies to', () => {
+      const c = JSON.stringify({ text: '😍', reference_video: { reference_video_id: '123', reference_video_is_story: true } })
+      expect(msgs(toEntries([m(1, 22, c)], { own: '11' }))[0].video).toMatchObject({ tag: 'Ответ на историю', href: 'https://www.tiktok.com/@/video/123' })
+    })
+    it('marks a type it does not know, keeps the raw data, and names the ones it does', () => {
+      const [x, y] = msgs(toEntries([m(1, 22, '{"foo":"bar"}', { type: 4242 }), m(2, 22, '{"title":"#тег"}', { type: 19 })], { own: '11' }))
+      expect(x).toMatchObject({ unknown: true, tag: 'Неизвестный тип · тип 4242' })
+      expect(x.rawText).toContain('foo')
+      expect(y.unknown).toBeUndefined()
+    })
+    it('writes group notices out and names the members of a group', () => {
+      const n = JSON.stringify({ aweType: 103101, subject_users: [{ nickname: 'Аня' }] })
+      const e = msgs(toEntries([m(1, 0, n, { type: 1031 }), m(2, 22, '{"text":"a"}'), m(3, 33, '{"text":"b"}'), m(4, 11, '{"text":"c"}')], { own: '11' }))
+      expect(e[0]).toMatchObject({ service: true, text: 'Аня создал(а) группу' })
+      expect(e.map((x) => x.author)).toEqual(['TikTok', 'Участник 1', 'Участник 2', undefined])
+    })
+    it('shows a deleted message from any non-empty mark, without its old files', () => {
+      const [x] = msgs(toEntries([m(1, 22, '{"hack":"1"}', { type: 1805, ext: { 's:is_recalled': 'true' } })], { own: '11' }))
+      expect(x).toMatchObject({ text: 'Сообщение удалено', deleted: true, media: [] })
+    })
   })
   it('fills the slots of a system notice and links the post it names', () => {
     const n = JSON.stringify({ tips: 'Ann liked {{1}} you shared', template: [{ key: 1, name: 'the post', extra: { item_id: '7696232449176505618' } }] })
@@ -243,14 +409,13 @@ describe('toEntries', () => {
     expect(x.text).toBe('Ann liked the post you shared')
     expect(x.video?.href).toBe('https://www.tiktok.com/@/video/7696232449176505618')
   })
-  it('shows a shared profile, a recalled message, and hides single-value markers', () => {
+  it('shows a shared profile and a recalled message', () => {
     const card = JSON.stringify({ uid: '5', secUID: 'x', name: 'Bob', desc: 'bob_1', avatar: { url_list: ['https://p16.example.com/a.jpg'] } })
     const [c] = msgs(toEntries([m(1, 11, card, { type: 25 })], { own: '11' }))
     expect(c.text).toBe('Профиль: Bob (@bob_1)')
     expect(c.media[0]).toMatchObject({ kind: 'image', src: 'https://p16.example.com/a.jpg' })
     const [r] = msgs(toEntries([m(2, 22, '', { ext: { 's:is_recalled': '1' } })], { own: '11' }))
     expect(r.text).toBe('Сообщение удалено')
-    expect(isHidden(m(3, 11, '{"hack":"1"}', { type: 1813 }))).toBe(true)
   })
   it('reads seconds, milliseconds and microseconds', () => {
     expect(toMs(1700000000n)).toBe(1700000000000)

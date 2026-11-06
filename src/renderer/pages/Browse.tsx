@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bug, Clapperboard, ExternalLink, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
 import { AccountView, ChatExportProgress } from '@shared/types'
-import { call, toast } from '../api'
+import { call } from '../api'
 import { Dialog } from '../Dialogs'
 import { Page } from '../App'
 
@@ -75,11 +75,7 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
     await call('account:confirm', { id: active!.id, username, avatar })
     setConfirming(false)
   }
-  async function exportChat() {
-    const r = await call<{ path: string; messages: number; complete: boolean; warnings: string[] } | null>('chat:export')
-    if (!r) return
-    toast(`Чат сохранён: ${r.messages} сообщений. ${r.complete ? 'История загружена полностью.' : 'История неполная, подробности в файле.'}`, !r.complete)
-  }
+  const exportChat = () => openDialog({ kind: 'chatexport', acct: active! })
   const nav = (a: string) => call('browse:nav', a)
   const analyze = () => openDialog({ kind: 'psy', acct: active!, who: profile ?? '', overlay: true })
   const signedIn = active.session === 'logged_in'

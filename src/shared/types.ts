@@ -110,7 +110,80 @@ export interface RepostSummary {
   years: { year: number; count: number }[]
 }
 
+export const SWEEP_KINDS = ['likes', 'favorites', 'following'] as const
+export type SweepKind = (typeof SWEEP_KINDS)[number]
+export const SWEEP_SPEEDS = ['careful', 'normal', 'fast'] as const
+
+/** A video or an account in a list being cleaned. `sec` is the public secUid of the author or the account. */
+export interface SweepItem { id: string; sec?: string; author?: string; title?: string; cover?: string; time?: number; photo?: boolean; friend?: boolean; verified?: boolean; videos?: number; followers?: number }
+/** What to clean: filters, then the order, then the number (none = all that pass the filters). */
+export interface SweepChoice {
+  count?: number
+  order: 'new' | 'old'
+  speed: (typeof SWEEP_SPEEDS)[number]
+  keep: string[] // @names that are not touched
+  years: number[] // only videos of these years; empty = all
+  type: 'all' | 'video' | 'photo'
+  keepFriends: boolean
+  keepVerified: boolean
+  onlyEmpty: boolean // accounts without a single video
+}
+export interface SweepSummary {
+  total: number
+  declared?: number // how many TikTok says the list has, unavailable videos included
+  partial?: boolean // the list was withheld: gathered from the Following feed, so only accounts with videos
+  authors: number
+  photos: number
+  friends: number
+  verified: number
+  empty: number
+  newest?: number
+  oldest?: number
+  top: { name: string; count: number }[]
+  years: { year: number; count: number }[]
+}
+/** Progress of a cleanup of likes, favorites or following, pushed to the UI with every change. */
+export interface SweepJob {
+  accountId: string
+  kind: SweepKind
+  status: 'running' | 'ready' | 'done' | 'stopped' // ready = search finished, waiting for the user's choice
+  phase: 'scan' | 'delete' | 'verify'
+  pass?: number
+  found: number
+  sent?: number // TikTok took the request
+  removed: number // the list no longer shows it; a reply does not count
+  failed: number
+  returned?: number // sent, but the list still showed them
+  target?: number
+  summary?: SweepSummary
+  message: string
+  startedAt: number
+  deleteStartedAt?: number
+  finishedAt?: number
+}
+
 /** Progress of a running chat export: messages loaded and read, then files saved, then the file written. */
+/** Which part of the chat to export: everything, the last N messages, or a time span (ms, either end may be open). */
+export type ChatRange = { mode: 'all' } | { mode: 'last'; count: number } | { mode: 'time'; from?: number; to?: number }
+export const MAX_RANGE_COUNT = 1_000_000
+
+/** Checks a range that came over IPC; anything odd means «all». */
+export function cleanRange(r: unknown): ChatRange {
+  const x = r as { mode?: unknown; count?: unknown; from?: unknown; to?: unknown } | null
+  const ms = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 4e12 ? Math.floor(v) : undefined)
+  if (x?.mode === 'last') {
+    const n = typeof x.count === 'number' && Number.isFinite(x.count) ? Math.floor(x.count) : 0
+    return n >= 1 ? { mode: 'last', count: Math.min(n, MAX_RANGE_COUNT) } : { mode: 'all' }
+  }
+  if (x?.mode === 'time') {
+    const from = ms(x.from), to = ms(x.to)
+    if (from === undefined && to === undefined) return { mode: 'all' }
+    if (from !== undefined && to !== undefined && from > to) return { mode: 'time', from: to, to: from }
+    return { mode: 'time', from, to }
+  }
+  return { mode: 'all' }
+}
+
 export interface ChatExportProgress { phase: 'loading' | 'reading' | 'media' | 'saving'; done: number; total?: number }
 
 /** Progress of a repost portrait (VLM analysis), pushed to the UI with every change. */

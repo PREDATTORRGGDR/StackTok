@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto'
+import { createDecipheriv, createHash } from 'node:crypto'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ChatExportProgress } from '../shared/types'
+import { ChatExportProgress, ChatRange } from '../shared/types'
 import { HistoryPage, ImMessage, historyOf, historyRequest, parseHistory } from './chat-api'
-import { ChatDump, ExportEntry, ExportMedia, Person } from './chat-export-html'
-import { EntryContext, Fatal, PullResult, isHidden, pullHistory, textOf, toEntries } from './chat-history'
+import { ChatDump, ExportEntry, ExportMedia, ExportReaction, MediaKind, MediaSecret, Person } from './chat-export-html'
+import { EntryContext, Fatal, PullResult, pullHistory, pullRecent, selectRange, textOf, toEntries, toMs } from './chat-history'
 
 const MAX_FILE = 100 * 1024 * 1024 // one downloaded file
 const INLINE_MAX = 1.5 * 1024 * 1024 // files up to this size go inside the page, bigger ones into the folder next to it
@@ -225,7 +225,7 @@ async function chatPage(cmd: string, arg: PageArg = {}): Promise<unknown> {
     const kids = [...el.children].map((c) => outline(c, left, depth + 1)).filter(Boolean).join(' ')
     return el.tagName.toLowerCase() + (e2e ? `[${e2e}]` : '') + (kids ? `(${kids})` : '')
   }
-  const media = async (kind: 'image' | 'sticker' | 'video' | 'audio', src: string, extra: Partial<ExportMedia> = {}): Promise<ExportMedia> => {
+  const media = async (kind: MediaKind, src: string, extra: Partial<ExportMedia> = {}): Promise<ExportMedia> => {
     const m: ExportMedia = { kind, src, ...extra }
     if (src.startsWith('blob:')) { m.data = await toData(src); m.src = '' }
     else if (src.startsWith('data:')) { m.data = src.length <= MAX * 1.4 ? src : undefined; m.src = '' }
@@ -285,7 +285,7 @@ async function chatPage(cmd: string, arg: PageArg = {}): Promise<unknown> {
 
       const found: ExportMedia[] = []
       const seen = new Set<string>()
-      const add = async (kind: 'image' | 'sticker' | 'video' | 'audio', src: string, extra: Partial<ExportMedia> = {}) => {
+      const add = async (kind: MediaKind, src: string, extra: Partial<ExportMedia> = {}) => {
         if (!src || seen.has(src)) return
         seen.add(src)
         found.push(await media(kind, src, extra))
@@ -294,7 +294,7 @@ async function chatPage(cmd: string, arg: PageArg = {}): Promise<unknown> {
         if (!outside(img)) continue // emoji inside text bubbles are already part of the text
         const src = img.currentSrc || img.src
         const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height
-        const sticker = /sticker|emoji|emote|gif/i.test(src) || (!img.alt && Math.max(iw, ih) > 0 && Math.max(iw, ih) <= 220 && Math.abs(iw - ih) <= Math.max(iw, ih) * 0.25)
+        const sticker = img.alt === 'sticker' || !!img.closest("[class*='StickerContainer']") || /sticker|emoji|emote|gif/i.test(src) || (!img.alt && Math.max(iw, ih) > 0 && Math.max(iw, ih) <= 220 && Math.abs(iw - ih) <= Math.max(iw, ih) * 0.25)
         await add(sticker ? 'sticker' : 'image', src, { alt: img.alt || undefined, width: iw || undefined, height: ih || undefined })
       }
       for (const c of item.querySelectorAll('canvas')) {
@@ -304,7 +304,8 @@ async function chatPage(cmd: string, arg: PageArg = {}): Promise<unknown> {
       for (const v of item.querySelectorAll<HTMLMediaElement>('video, audio')) {
         if (!outside(v)) continue
         const src = v.currentSrc || v.src || v.querySelector('source')?.src || ''
-        await add(v.tagName === 'VIDEO' ? 'video' : 'audio', src, { alt: (v as HTMLVideoElement).poster || undefined })
+        const inSticker = !!v.closest("[class*='StickerContainer']")
+        await add(inSticker ? 'sticker' : v.tagName === 'VIDEO' ? 'video' : 'audio', src, { alt: (v as HTMLVideoElement).poster || undefined, animated: inSticker || undefined })
       }
       if (!found.length && !text && !shared) { // a picture drawn as a CSS background: only worth looking for when nothing else was found
         for (const el of [item, ...item.querySelectorAll<HTMLElement>('div, span, i')].slice(0, 40)) {
@@ -333,8 +334,15 @@ async function chatPage(cmd: string, arg: PageArg = {}): Promise<unknown> {
         }
       }
 
-      const reply = [...item.querySelectorAll("[data-e2e*='reply']")].find((r) => !/btn/.test(r.getAttribute('data-e2e') ?? ''))
-      const reactions = [...item.querySelectorAll("[data-e2e*='reaction']")].filter((r) => !/btn/.test(r.getAttribute('data-e2e') ?? '')).map(textOf).filter(Boolean)
+      const reply = item.querySelector("[class*='DivRefTextContent'], [class*='DivRefMessage']") ?? [...item.querySelectorAll("[data-e2e*='reply']")].find((r) => !/btn/.test(r.getAttribute('data-e2e') ?? ''))
+      // the pill under a message: one child per emoji, a number only above one; who reacted the page shows only on a click
+      const reactions: ExportReaction[] = []
+      for (const box of item.querySelectorAll(E('dm-new-reaction-display'))) {
+        for (const r of box.children.length ? [...box.children] : [box]) {
+          const m = /^(.*?)(\d+)?$/su.exec((r.textContent ?? '').trim())
+          if (m?.[1]) reactions.push({ emoji: m[1], count: Number(m[2] ?? 1), who: [] })
+        }
+      }
 
       // Who wrote it: own messages sit on the right of the list, the other person's on the left.
       const anchor = bubbles[0] ?? item.querySelector('img, video') ?? item
@@ -481,10 +489,21 @@ async function checkFast(wc: Electron.WebContents, messages: ImMessage[]): Promi
 }
 
 /** Pulls the whole conversation from TikTok directly and checks it against the page. */
-async function pullFast(wc: Electron.WebContents, tpl: Template, ctl: ExportCtl): Promise<{ out: PullResult; ctx: EntryContext; notes: string[] }> {
-  const out = await pullHistory(pageAsk(wc, tpl), { concurrency: FAST_WORKERS, cancelled: () => ctl.cancelled(), progress: (n) => ctl.progress({ phase: 'loading', done: n }) })
+async function pullFast(wc: Electron.WebContents, tpl: Template, ctl: ExportCtl, range: ChatRange): Promise<{ out: PullResult; ctx: EntryContext; notes: string[] }> {
+  const ask = pageAsk(wc, tpl)
+  const cancelled = () => ctl.cancelled()
+  const progress = (n: number) => ctl.progress({ phase: 'loading', done: n })
+  let out: PullResult
+  if (range.mode === 'all') out = await pullHistory(ask, { concurrency: FAST_WORKERS, cancelled, progress })
+  else {
+    const from = range.mode === 'time' ? range.from : undefined
+    const need = range.mode === 'last' ? range.count : 0
+    // a few pages from the newest one are enough: stop when the count is reached or a page reaches back before the span
+    out = await pullRecent(ask, { cancelled, progress, enough: (page, total) => (need ? total >= need : from !== undefined && page.some((m) => toMs(m.time) < from)) })
+  }
   if (!out.messages.length) throw new Error('история пришла пустой')
-  return { out, ...(await checkFast(wc, out.messages)) }
+  const checked = await checkFast(wc, out.messages) // the newest page is always pulled, so the check against the page works for any range
+  return { out: { ...out, messages: selectRange(out.messages, range) }, ...checked }
 }
 
 /** What identifies a message when two reads of the page overlap. */
@@ -519,12 +538,24 @@ export function appendWindow(acc: ExportEntry[], chunk: ExportEntry[]): { added:
  * so loading runs as fast as TikTok answers. The page must be drawing frames: otherwise nothing loads, and a quiet page
  * would look like the beginning of the chat; such a page is never counted as finished.
  */
-export async function collectChat(wc: Electron.WebContents, ctl: ExportCtl): Promise<{ partner: Person; entries: ExportEntry[]; complete: boolean; warnings: string[] }> {
+export async function collectChat(wc: Electron.WebContents, ctl: ExportCtl, range: ChatRange = { mode: 'all' }): Promise<{ partner: Person; entries: ExportEntry[]; complete: boolean; warnings: string[] }> {
   const watch = await watchTemplate(wc)
-  try { return await collectLoaded(wc, ctl, watch) } finally { watch.stop() }
+  try {
+    const got = await collectLoaded(wc, ctl, watch, range)
+    return range.mode === 'all' || got.fastRange ? got : trimScrolled(got, range)
+  } finally { watch.stop() }
 }
 
-async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Watch): Promise<{ partner: Person; entries: ExportEntry[]; complete: boolean; warnings: string[] }> {
+/** The slow way loaded everything: «last N» is cut here; a time span cannot be cut from page text, so the file says so. */
+function trimScrolled<T extends { entries: ExportEntry[]; warnings: string[] }>(got: T, range: ChatRange): T {
+  if (range.mode === 'last') {
+    const at = got.entries.map((e, i) => (isMsg(e) ? i : -1)).filter((i) => i >= 0).slice(-range.count)[0] ?? 0
+    return { ...got, entries: got.entries.slice(at > 0 && !isMsg(got.entries[at - 1]) ? at - 1 : at) }
+  }
+  return { ...got, warnings: [...got.warnings, 'Выбранный период не удалось вырезать при загрузке со страницы: в файле весь доступный диалог.'] }
+}
+
+async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Watch, range: ChatRange): Promise<{ partner: Person; entries: ExportEntry[]; complete: boolean; warnings: string[]; fastRange?: boolean }> {
   const first = await chatInfo(wc)
   const key = first.name + '|' + first.handle
   const warnings: string[] = []
@@ -549,7 +580,7 @@ async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Wa
       if (tpl) { // the page asked TikTok for older messages: its request is the template for ours
         fast.state = 'run'
         await run(wc, 'cancel').catch(() => {}) // the page stops scrolling, our own requests take over
-        void pullFast(wc, tpl, ctl).then(
+        void pullFast(wc, tpl, ctl, range).then(
           (r) => { fast.out = r.out; fast.ctx = r.ctx; fast.notes.push(...r.notes); fast.state = 'done' },
           (e: unknown) => {
             if (e instanceof Fatal) fast.stopped = `TikTok ограничил запросы (${e.message}). Экспорт остановлен: подождите несколько минут и повторите.`
@@ -588,9 +619,7 @@ async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Wa
   if (fast.state === 'done' && fast.out) {
     const partner = await run<Person>(wc, 'header')
     await run(wc, 'bottom').catch(() => {})
-    const hidden = fast.out.messages.filter(isHidden).length
-    if (hidden) fast.notes.push(`Служебных записей TikTok пропущено: ${hidden} (в чате их не видно).`)
-    return { partner, entries: toEntries(fast.out.messages, fast.ctx ?? {}), complete: true, warnings: fast.notes }
+    return { partner, entries: toEntries(fast.out.messages, fast.ctx ?? {}), complete: true, warnings: fast.notes, fastRange: true }
   }
 
   // ----- reading -----
@@ -648,7 +677,9 @@ async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Wa
   const got = entries.filter(isMsg).length
   if (!got) warnings.push('Сообщения в диалоге не найдены (возможно, TikTok изменил разметку).')
   if (!complete && !warnings.length) warnings.push('Начало переписки не подтверждено.')
-  return { partner, entries, complete: complete && got > 0 && !warnings.length, warnings: [...warnings, ...fast.notes] }
+  const whole = complete && got > 0 && !warnings.length
+  warnings.push('Файл собран со страницы, а не из данных TikTok: стикеры и голосовые, которых нет на сайте, служебные строки и удалённые сообщения здесь могут отсутствовать, а кто поставил реакцию, не указано.')
+  return { partner, entries, complete: whole, warnings: [...warnings, ...fast.notes] }
 }
 
 const publicHttps = (u: string, devOrigin?: string) => {
@@ -679,8 +710,28 @@ export function sniff(b: Buffer): { mime: string; ext: string } | undefined {
   }
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return { mime: 'video/webm', ext: 'webm' }
   if (s(0, 4) === 'OggS') return { mime: 'audio/ogg', ext: 'ogg' }
+  if (s(0, 5) === '#!AMR') return { mime: 'audio/amr', ext: 'amr' }
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return { mime: 'audio/aac', ext: 'aac' }
   if (s(0, 3) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return { mime: 'audio/mpeg', ext: 'mp3' }
+  if (/^\s*\{/.test(s(0, 16)) && b.includes('"layers"') && b.includes('"v"')) return { mime: 'application/json', ext: 'json' } // an animated sticker in Lottie: saved, a browser cannot draw it
 }
+
+/**
+ * Opens a file TikTok stores encrypted: AES-256-GCM, a hex key from the message, the first 12 bytes are the IV and the last 16 the tag
+ * (as the page's own decryptMedia does it). Nothing when the key does not fit.
+ */
+export function openMedia(buf: Buffer, hexKey: string): Buffer | undefined {
+  if (!/^[\da-f]{64}$/i.test(hexKey) || buf.length < 29) return undefined
+  try {
+    const d = createDecipheriv('aes-256-gcm', Buffer.from(hexKey, 'hex'), buf.subarray(0, 12))
+    d.setAuthTag(buf.subarray(buf.length - 16))
+    return Buffer.concat([d.update(buf.subarray(12, buf.length - 16)), d.final()])
+  } catch { return undefined }
+}
+
+/** What the page sends along for encrypted files: the hashed account id, and the page's own constant for photos. */
+const MINT_TOKEN = '8a8a1162ec959995aa156772a5ce52b3'
+const secretHeaders = (s?: MediaSecret): Record<string, string> => ({ ...(s?.user ? { 'X-User': s.user } : {}), ...(s?.mint ? { 'mint-token': MINT_TOKEN } : {}) })
 
 /**
  * Saves every picture, sticker, cover and sound once. Small files go inside the page, big ones into a folder next to it,
@@ -698,26 +749,37 @@ export async function embedMedia(
 
   let saved = 0, failed = 0, files = 0, inline = 0
   const fail = (ms: ExportMedia[], note: string) => { failed++; ms.forEach((m) => (m.note ??= note)) }
-  const settle = async (ms: ExportMedia[], buf: Buffer) => {
+  const keep = async (ms: ExportMedia[], buf: Buffer, ext: string) => {
+    const name = `${createHash('sha1').update(buf).digest('hex')}.${ext}`
+    await mkdir(opt.dir, { recursive: true })
+    const full = join(opt.dir, name)
+    if (!(await access(full).then(() => true, () => false))) await writeFile(full, buf)
+    ms.forEach((m) => { m.file = `${opt.folder}/${name}`; m.data = undefined })
+    files++
+  }
+  /** false when the bytes are not a file at all (an error page) */
+  const settle = async (ms: ExportMedia[], buf: Buffer): Promise<boolean> => {
     const t = sniff(buf)
-    if (!t) return fail(ms, 'неизвестный формат файла')
+    if (!t) {
+      if (buf.length < 12 || /^\s*</.test(buf.toString('latin1', 0, 32))) return false
+      await keep(ms, buf, 'bin') // no format a browser knows, but the bytes are worth keeping
+      ms.forEach((m) => { m.note ??= 'формат файла не определён' })
+      saved++
+      return true
+    }
     for (const m of ms) {
-      if (t.mime.startsWith('video/')) { m.animated = m.kind !== 'video'; m.kind = 'video' } // animated stickers and GIFs often come as mp4
+      if (m.kind === 'audio') continue // a voice message in an mp4 box stays a voice message
+      if (t.mime.startsWith('video/')) { m.animated = m.kind === 'sticker' || m.kind === 'image'; m.kind = 'video' } // animated stickers and GIFs often come as mp4
       else if (t.mime.startsWith('audio/')) m.kind = 'audio'
     }
-    if (buf.length <= INLINE_MAX && inline + buf.length <= INLINE_TOTAL) {
+    if (t.mime === 'application/json' || t.mime === 'audio/amr') await keep(ms, buf, t.ext)
+    else if (buf.length <= INLINE_MAX && inline + buf.length <= INLINE_TOTAL) {
       inline += buf.length
       const d = `data:${t.mime};base64,${buf.toString('base64')}`
       ms.forEach((m) => { m.data = d })
-    } else {
-      const name = `${createHash('sha1').update(buf).digest('hex')}.${t.ext}`
-      await mkdir(opt.dir, { recursive: true })
-      const full = join(opt.dir, name)
-      if (!(await access(full).then(() => true, () => false))) await writeFile(full, buf)
-      ms.forEach((m) => { m.file = `${opt.folder}/${name}`; m.data = undefined })
-      files++
-    }
+    } else await keep(ms, buf, t.ext)
     saved++
+    return true
   }
 
   // files the page already handed over as data (blob: sources)
@@ -725,19 +787,20 @@ export async function embedMedia(
     if (!m.data) continue
     const x = /^data:[^;,]*;base64,(.*)$/s.exec(m.data)
     m.data = undefined
-    if (x) await settle([m], Buffer.from(x[1], 'base64'))
-    else fail([m], 'формат данных не поддерживается')
+    if (!x) fail([m], 'формат данных не поддерживается')
+    else if (!(await settle([m], Buffer.from(x[1], 'base64')))) fail([m], 'неизвестный формат файла')
   }
 
   const bySrc = new Map<string, ExportMedia[]>()
   for (const m of all) if (m.src && !m.data && !m.file) bySrc.set(m.src, [...(bySrc.get(m.src) ?? []), m])
   const urls = [...bySrc.keys()]
   let done = 0
-  const get = async (url: string): Promise<Buffer | string> => {
+  const get = async (url: string, secret?: MediaSecret): Promise<Buffer | string> => {
+    const extra = secretHeaders(secret)
     for (let attempt = 0; ; attempt++) {
       try {
-        let res = await ses.fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(300000) })
-        if (res.status === 403) res = await ses.fetch(url, { credentials: 'include', headers: { referer: 'https://www.tiktok.com/' }, signal: AbortSignal.timeout(300000) }) // some covers want the page as referrer
+        let res = await ses.fetch(url, { credentials: 'omit', headers: extra, signal: AbortSignal.timeout(300000) })
+        if (res.status === 403) res = await ses.fetch(url, { credentials: 'include', headers: { ...extra, referer: 'https://www.tiktok.com/' }, signal: AbortSignal.timeout(300000) }) // some covers want the page as referrer
         if (res.status === 429 || res.status >= 500) throw new Error('transient')
         if (!res.ok || !res.body) return `ответ ${res.status}`
         const chunks: Uint8Array[] = []
@@ -762,17 +825,25 @@ export async function embedMedia(
     for (let u = queue.shift(); u !== undefined; u = queue.shift()) {
       if (ctl.cancelled()) return
       const targets = bySrc.get(u)!
-      if (!publicHttps(u, opt.devOrigin)) fail(targets, 'адрес не поддерживается')
-      else {
-        const got = await get(u)
-        if (typeof got === 'string') fail(targets, got)
-        else await settle(targets, got)
+      const first = targets[0]
+      let why = ''
+      let ok = false
+      for (const s of [{ src: first.src, secret: first.secret }, ...(first.alts ?? [])]) { // the same file from another address or in another size
+        if (!publicHttps(s.src, opt.devOrigin)) { why ||= 'адрес не поддерживается'; continue }
+        const got = await get(s.src, s.secret)
+        if (typeof got === 'string') { why ||= got; continue }
+        const plain = s.secret ? openMedia(got, s.secret.key) : got
+        if (!plain) { why ||= 'файл не расшифрован'; continue }
+        if (await settle(targets, plain)) { ok = true; break }
+        why ||= 'неизвестный формат файла'
       }
+      if (!ok) fail(targets, why || 'не удалось скачать')
       ctl.progress({ phase: 'media', done: ++done, total: urls.length })
     }
   }
   ctl.progress({ phase: 'media', done: 0, total: urls.length })
   await Promise.all(Array.from({ length: FETCHERS }, worker))
   if (ctl.cancelled()) throw new Error('Экспорт отменён.')
+  for (const m of all) { m.secret = undefined; m.alts = m.alts?.map((a) => ({ src: a.src })) } // keys never reach the file
   return { saved, failed, files }
 }

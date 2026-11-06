@@ -3,7 +3,9 @@ import { AlertTriangle, CheckCircle2, Copy, Download, Globe, Layers, LayoutGrid,
 import { ACCENT_COLORS, BG_SOLID } from '@shared/types'
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
+import type { AccountView } from '@shared/types'
 import { RepostScreen } from './RepostScreen'
+import { SweepCard, SweepScreen } from './SweepScreen'
 import { StatsDialog } from './StatsDialog'
 import { Accounts } from './pages/Accounts'
 import { ToolsPage } from './pages/Tools'
@@ -175,8 +177,10 @@ export function App() {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [psyFull, setPsyFull] = useState(false) // full-screen progress for an analysis started from the Browse tab
   const [repMin, setRepMin] = useState(false) // repost cleanup folded into the corner card
+  const [sweepFor, setSweepFor] = useState<AccountView | null>(null) // the cleanup screen is open for this account
+  const [sweepMin, setSweepMin] = useState(false) // cleanup folded into the corner card
   // Everything that used to ask first now opens the search: it only reads, and the choice comes after it.
-  const open = (d: Dialog) => { if (d.kind === 'reposts') { setRepMin(false); call('reposts:start', { id: d.acct.id }) } else setDialog(d) }
+  const open = (d: Dialog) => { if (d.kind === 'reposts') { setRepMin(false); call('reposts:start', { id: d.acct.id }) } else if (d.kind === 'sweep') { setSweepMin(false); setSweepFor(d.acct) } else setDialog(d) }
   const hasPsy = !!s?.psy
   useEffect(() => { if (!hasPsy) setPsyFull(false) }, [hasPsy])
   const toasts = useToasts()
@@ -256,6 +260,7 @@ export function App() {
           </div>
         </main>
       </div>
+      {(sweepFor || s.sweep) && (sweepMin && s.sweep ? <SweepCard s={s} onOpen={() => setSweepMin(false)} /> : <SweepScreen s={s} acct={sweepFor ?? undefined} onClose={() => setSweepFor(null)} onMin={() => setSweepMin(true)} />)}
       {s.job && (repMin ? <JobCard s={s} onOpen={() => setRepMin(false)} /> : <RepostScreen s={s} onMin={() => setRepMin(true)} />)}
       {s.psy && <PsyCard s={s} full={psyFull} onMin={() => setPsyFull(false)} />}
       {dialog?.kind === 'stats' && <StatsDialog acct={dialog.acct} close={() => setDialog(null)} />}

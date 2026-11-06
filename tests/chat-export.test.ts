@@ -34,6 +34,52 @@ describe('chat export page', () => {
     expect(kindsOf(msg({ video: { text: '' } }))).toEqual(['shared'])
   })
 
+  it('classifies stickers, reactions, deleted and service lines', () => {
+    expect(kindsOf(msg({ media: [{ kind: 'audio', src: '' }], reactions: [{ emoji: '💔', count: 1, who: ['вы'] }] }))).toEqual(['audio', 'reaction'])
+    expect(kindsOf(msg({ text: 'Сообщение удалено', deleted: true }))).toEqual(['deleted'])
+    expect(kindsOf(msg({ text: 'Вы теперь друзья', service: true }))).toEqual(['service'])
+    expect(kindsOf(msg({ unknown: true, rawText: '{}' }))).toEqual(['unknown'])
+  })
+
+  it('writes reactions as emoji, count and who, once each', () => {
+    const html = renderChatHtml(dump([msg({ text: 'a', reactions: [{ emoji: '💔', count: 1, who: ['собеседник'] }, { emoji: '😂', count: 2, who: ['вы', 'собеседник'] }, { emoji: '🏷️', code: 'e:new', count: 1, who: ['вы'] }] })]))
+    const box = /<div class="reactions">.*?<\/div>/s.exec(html)![0]
+    expect(box.match(/class="rx"/g)).toHaveLength(3)
+    expect(box).toContain('<b>💔</b> · собеседник')
+    expect(box).toContain('<b>😂</b><i>×2</i> · вы, собеседник')
+    expect(box).toContain('<code>e:new</code>')
+  })
+
+  it('marks an unknown type, shows a count of them and keeps the raw data in the details', () => {
+    const html = renderChatHtml(dump([msg({ unknown: true, tag: 'Неизвестный тип · тип 42', rawText: '{"foo":"bar"}' })]))
+    expect(html).toContain('Неизвестный тип · тип 42')
+    expect(html).toContain('Неизвестных типов сообщений: 1')
+    expect(html).toContain('<summary>Подробности</summary>')
+    expect(html).toContain('&quot;foo&quot;')
+  })
+
+  it('links a reply to the quoted message and escapes the quote', () => {
+    const html = renderChatHtml(dump([msg({ text: 'a' }), msg({ text: 'b', reply: '<i>a</i>', replyWho: 'Ответ: вы', replyTo: 1 })]))
+    expect(html).toContain('href="#m1"')
+    expect(html).toContain('id="m1"')
+    expect(html).not.toContain('<i>a</i>')
+  })
+
+  it('never writes the key of an encrypted file, in the page or in the JSON', () => {
+    const key = 'ab'.repeat(32)
+    const html = renderChatHtml(dump([msg({ media: [{ kind: 'image', src: 'https://c.example/p', secret: { key, user: 'cd'.repeat(16), mint: true }, alts: [{ src: 'https://c.example/q', secret: { key } }], note: 'x' }] })]))
+    expect(html).not.toContain(key)
+    expect(html).not.toContain('cd'.repeat(16))
+    expect(html).toContain('https://c.example/q')
+  })
+
+  it('groups the messages of one person: one avatar, on the last one', () => {
+    const html = renderChatHtml(dump([msg({ text: 'a' }), msg({ text: 'b' }), msg({ side: 'me', text: 'c' })]))
+    expect(html.match(/<div class="av them none"/g)).toHaveLength(1)
+    expect(html.match(/<div class="av them"/g)).toHaveLength(1)
+    expect(html).toContain('data-i="А"')
+  })
+
   it('shows a warning when the history is incomplete', () => {
     const html = renderChatHtml(dump([msg({ text: 'x' })], { complete: false, warnings: ['Файл неполный.'] }))
     expect(html).toContain('Файл неполный.')

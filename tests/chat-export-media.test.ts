@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { appendWindow, sniff } from '../src/main/chat-export'
+import { createCipheriv } from 'node:crypto'
+import { appendWindow, openMedia, sniff } from '../src/main/chat-export'
 import { ChatDump, ExportEntry, ExportMessage, renderChatHtml } from '../src/main/chat-export-html'
 
 const msg = (o: Partial<ExportMessage> = {}): ExportMessage => ({ side: 'them', text: '', links: [], media: [], reactions: [], rawText: '', outline: 'div', ...o })
@@ -26,6 +27,46 @@ describe('file type detection', () => {
     expect(sniff(Buffer.from('<!doctype html><script>alert(1)</script>', 'latin1'))).toBeUndefined()
     expect(sniff(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>', 'latin1'))).toBeUndefined()
     expect(sniff(Buffer.from('short'))).toBeUndefined()
+  })
+})
+
+describe('stickers and sounds a browser may not show', () => {
+  it('recognises Lottie stickers, AAC and AMR', () => {
+    expect(sniff(Buffer.from('{"v":"5.5.7","fr":30,"layers":[]}', 'latin1'))).toEqual({ mime: 'application/json', ext: 'json' })
+    expect(sniff(pad(Buffer.from('fff15080', 'hex')))?.mime).toBe('audio/aac')
+    expect(sniff(ascii('#!AMR'))?.ext).toBe('amr')
+    expect(sniff(Buffer.from('{"error":"not found, sorry"}', 'latin1'))).toBeUndefined()
+  })
+  it('links a Lottie sticker saved next to the page and says the browser will not draw it', () => {
+    const file = 'chat_files/' + 'b'.repeat(40) + '.json'
+    const html = renderChatHtml(dump([msg({ media: [{ kind: 'sticker', src: 'https://c.example/s', file, label: 'Кот' }] })]))
+    expect(html).toContain(`href="${file}"`)
+    expect(html).toContain('браузер его не показывает')
+  })
+  it('keeps the caption, the reason and the link of a sticker that could not be saved', () => {
+    const html = renderChatHtml(dump([msg({ media: [{ kind: 'sticker', src: 'https://c.example/s', label: 'Кот', note: 'ответ 403' }] })]))
+    expect(html).toContain('Стикер «Кот»: файл не сохранён (ответ 403)')
+    expect(html).toContain('href="https://c.example/s"')
+  })
+})
+
+describe('encrypted files', () => {
+  const key = Buffer.alloc(32, 7)
+  const seal = (plain: Buffer) => {
+    const iv = Buffer.alloc(12, 3)
+    const c = createCipheriv('aes-256-gcm', key, iv)
+    const body = Buffer.concat([c.update(plain), c.final()])
+    return Buffer.concat([iv, body, c.getAuthTag()])
+  }
+  it('opens them the way the page does: IV first, tag last', () => {
+    const plain = Buffer.from('hello, this is a picture')
+    expect(openMedia(seal(plain), key.toString('hex'))?.toString()).toBe(plain.toString())
+  })
+  it('gives nothing for a wrong key, damaged data or a bad key format', () => {
+    const box = seal(Buffer.from('hello, this is a picture'))
+    expect(openMedia(box, 'cd'.repeat(32))).toBeUndefined()
+    expect(openMedia(Buffer.concat([box.subarray(0, 20), Buffer.from([0]), box.subarray(21)]), key.toString('hex'))).toBeUndefined()
+    expect(openMedia(box, 'zz')).toBeUndefined()
   })
 })
 

@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { BarChart3, Clapperboard, Download, FileDown, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
+import { BarChart3, Clapperboard, Download, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call, toast } from './api'
 import type { Dialog } from './Dialogs'
@@ -48,6 +48,13 @@ export const TOOLS: Tool[] = [
     run: (c) => c.openDialog({ kind: 'reposts', acct: c.acct! })
   },
   {
+    id: 'sweep', group: 'Чистка аккаунта', title: 'Лайки, избранное и подписки', icon: <Heart size={20} />,
+    desc: 'Сначала показывает, что нашлось, потом вы выбираете сколько, с какой стороны, за какие годы, кого не трогать и с какой скоростью.',
+    blocked: needLogin,
+    busy: (c) => c.s.sweep?.status === 'running',
+    run: (c) => c.openDialog({ kind: 'sweep', acct: c.acct! })
+  },
+  {
     id: 'chats', group: 'Чаты', title: 'Открыть сообщения', icon: <MessageCircle size={20} />,
     desc: 'Страница сообщений аккаунта с обоями и стеклом. Оформление настраивается на странице «Настройки».',
     blocked: needLogin,
@@ -58,10 +65,9 @@ export const TOOLS: Tool[] = [
     desc: 'Сохраняет открытый диалог целиком: сообщения, время, видео, стикеры и картинки. Сначала откройте нужный чат.',
     blocked: needLogin,
     busy: (c) => !!c.s.chatExport,
-    run: async (c) => {
+    run: (c) => {
       c.go('browse')
-      const r = await call<{ messages: number; complete: boolean } | null>('chat:export')
-      if (r) toast(`Чат сохранён: ${r.messages} сообщений. ${r.complete ? 'История загружена полностью.' : 'История неполная, подробности в файле.'}`, !r.complete)
+      c.openDialog({ kind: 'chatexport', acct: c.acct! })
     }
   },
   {

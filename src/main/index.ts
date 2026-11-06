@@ -2,7 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electro
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, SessionState, Settings, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
 import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
 import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
 import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
@@ -11,6 +11,8 @@ import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
 import type { RepostCleaner } from './repost-cleaner'
 import { findReposts } from './reposts'
+import { Sweeper, cleanChoice, linkOf, pick } from './sweep'
+import { findSweep } from './sweep-run'
 import { parseHandle, profileOf } from './psycho'
 import { KeyBox, runPortrait } from './psycho-run'
 import { Downloader } from './downloader'
@@ -29,6 +31,7 @@ let downloader: Downloader
 let notice: { id: number; text: string } | null = null // one-off message for the UI, shown as a toast
 let chatExport: { progress: ChatExportProgress; cancelled: boolean } | null = null // the running chat export, if any
 let reposts: { job: Job; cleaner?: RepostCleaner; stop: boolean } | null = null // at most one repost cleanup at a time
+let sweep: { job: SweepJob; sweeper?: Sweeper; stop: boolean } | null = null // at most one cleanup of likes, favorites or following at a time
 let psy: { job: PsyJob; stop: boolean } | null = null // at most one repost portrait at a time
 let keybox: KeyBox
 
@@ -69,7 +72,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, psy: psy?.job ?? null, hasPsyKey: keybox?.has() ?? false, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, hasPsyKey: keybox?.has() ?? false, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -109,6 +112,12 @@ function stopReposts() {
   if (!reposts) return
   reposts.stop = true
   reposts.cleaner?.stop()
+}
+
+function stopSweep() {
+  if (!sweep) return
+  sweep.stop = true
+  sweep.sweeper?.stop()
 }
 
 // ---------- IPC ----------
@@ -165,6 +174,7 @@ const handlers: Record<string, Handler> = {
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
     const acc = account(a?.id)
     if (reposts?.job.accountId === acc.id) stopReposts()
+    if (sweep?.job.accountId === acc.id) stopSweep()
     if (psy?.job.accountId === acc.id) psy.stop = true
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
@@ -175,6 +185,7 @@ const handlers: Record<string, Handler> = {
   'account:wipe': async (a: { id: string }) => {
     const acc = account(a?.id)
     if (reposts?.job.accountId === acc.id) stopReposts()
+    if (sweep?.job.accountId === acc.id) stopSweep()
     if (psy?.job.accountId === acc.id) psy.stop = true
     await browse.wipe(acc.id)
     acc.verified = false
@@ -264,8 +275,9 @@ const handlers: Record<string, Handler> = {
     store.save(); push()
   },
   // The user asked for this export: reads the chat that is open in the active account's view and writes one HTML file where they choose.
-  'chat:export': async () => {
+  'chat:export': async (a?: { range?: unknown }) => {
     need(!chatExport, 'Экспорт уже идёт.')
+    const range = cleanRange(a?.range)
     const acc = account(store.data.activeAccountId)
     const target = browse.chatTarget(acc.id)
     if (!target) throw new Error('Откройте чат этого аккаунта на вкладке «Обзор».')
@@ -290,7 +302,7 @@ const handlers: Record<string, Handler> = {
     target.hold()
     push()
     try {
-      const got = await collectChat(target.wc, ctl)
+      const got = await collectChat(target.wc, ctl, range)
       const dump: ChatDump = {
         ...got, exportedAt: Date.now(), appVersion: app.getVersion(),
         owner: { name: acc.label, handle: acc.username, avatar: acc.avatar ? { kind: 'image', src: acc.avatar } : undefined }
@@ -339,6 +351,51 @@ const handlers: Record<string, Handler> = {
   },
   'reposts:stop': () => { stopReposts(); push() },
   'reposts:dismiss': () => { if (reposts && reposts.job.status !== 'running') reposts = null; push() },
+  // The user chose a list to clean: this only reads it. Nothing changes until `sweep:run`.
+  'sweep:start': (a: { id: string; kind: SweepKind }) => {
+    const acc = account(a?.id)
+    need(SWEEP_KINDS.includes(a?.kind), 'Неизвестный список.')
+    need(sweep?.job.status !== 'running' && sweep?.job.status !== 'ready', 'Чистка уже идёт.')
+    need(!(reposts?.job.status === 'running' && reposts.job.accountId === acc.id), 'Дождитесь конца удаления репостов.')
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    const run: NonNullable<typeof sweep> = {
+      job: { accountId: acc.id, kind: a.kind, status: 'running', phase: 'scan', found: 0, removed: 0, failed: 0, startedAt: Date.now(), message: 'Подключаюсь к TikTok…' },
+      stop: false
+    }
+    sweep = run
+    void findSweep(run.job, acc.verified ? acc.username : undefined, new URL(HOME_URL).origin, browse.contents(acc.id), push, (s) => {
+      run.sweeper = s
+      if (run.stop) s.stop()
+    }).finally(push)
+    push()
+    return true
+  },
+  // What a choice would touch, for the screen. Nothing but the first few goes to the UI.
+  'sweep:preview': (a: unknown) => {
+    const run = sweep
+    if (!run?.sweeper) return { matched: 0, sample: [] }
+    const list = pick(run.sweeper.items, cleanChoice(a), run.job.kind)
+    return { matched: list.length, sample: list.slice(0, run.job.kind === 'following' ? 12 : 18) }
+  },
+  // The user looked at the preview and confirmed: only here does anything change on the account.
+  'sweep:run': (a: unknown) => {
+    const run = sweep
+    need(run?.job.status === 'ready' && !!run.sweeper, 'Сначала дождитесь конца поиска.')
+    void run!.sweeper!.remove(cleanChoice(a)).finally(push)
+    push()
+    return true
+  },
+  'sweep:stop': () => { stopSweep(); push() },
+  'sweep:dismiss': () => { if (sweep && sweep.job.status !== 'running') sweep = null; push() },
+  // A list of what was removed, to a file the user picks: there is no undo button on TikTok's side.
+  'sweep:saveList': async () => {
+    const run = sweep
+    need(!!run?.sweeper?.gone.length, 'Список пуст.')
+    const r = await dialog.showSaveDialog(win, { title: 'Сохранить список', defaultPath: `tiktok-${run!.job.kind}-${new Date().toISOString().slice(0, 10)}.txt`, filters: [{ name: 'Текст', extensions: ['txt'] }] })
+    if (r.canceled || !r.filePath) return null
+    await writeFile(r.filePath, run!.sweeper!.gone.map((x) => linkOf(x, run!.job.kind)).join('\r\n') + '\r\n', 'utf8')
+    return run!.sweeper!.gone.length
+  },
   // The key goes to an OS-encrypted file in main; the UI only ever learns whether one is saved.
   'psy:key': (a: { key: string | null }) => {
     if (a?.key === null) keybox.clear()

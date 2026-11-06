@@ -173,3 +173,138 @@ export function parseMessage(f: Field[]): ImMessage {
     other: f.filter((x) => !NAMED.has(x.no))
   }
 }
+
+// ----- what a message carries besides its JSON content -----
+// Field numbers from im_proto in TikTok's own web bundle (the chunk with `e.MessageBody=function`), read 2026-11-06:
+// 15 property_list (reactions), 18 reference_info (quotes), 20 content_pb (cards: stickers, photos, videos, voice), 24 media_info_list.
+
+type Scalar = 's' | 'i'
+type Spec = { [no: number]: [string, Scalar | Spec, ('list' | 'map')?] }
+export type Json = Record<string, unknown>
+
+const TEXT: Spec = { 1: ['text', 's'] }
+const SIZE: Spec = { 1: ['width', 'i'], 2: ['height', 'i'] }
+const LINK: Spec = { 1: ['url_list', 's', 'list'], 2: ['action_type', 'i'] }
+const IMAGE: Spec = { 1: ['image_id', 's'], 2: ['url_list', 's', 'list'], 4: ['display_name', 's'], 5: ['resolution', SIZE], 6: ['decrypt_key', 's'], 7: ['fallback_icon_type', 'i'] }
+const VIDEO: Spec = { 1: ['video_id', 's'], 2: ['video_type', 'i'], 3: ['cover', IMAGE], 4: ['video_model', 's'], 5: ['link_info', LINK], 6: ['resolution', SIZE] }
+const USER: Spec = { 1: ['user_id', 'i'], 2: ['nickname', TEXT], 3: ['description', TEXT], 4: ['avatar', IMAGE], 5: ['link_info', LINK], 6: ['username', TEXT], 7: ['follower_count', 'i'], 8: ['is_verify', 'i'] }
+const FALLBACK: Spec = { 1: ['image', IMAGE], 2: ['text', TEXT], 3: ['link_info', LINK], 4: ['status', 'i'] }
+const HINT: Spec = { 1: ['sender_preview_text', TEXT], 2: ['receiver_preview_text', TEXT], 3: ['quote_preview_text', TEXT] }
+const REQ: Spec = { 1: ['query_data', { 1: ['resource_id', 's'], 2: ['extra', 's', 'map'] }] }
+const RESP: Spec = { 1: ['ttl', { 1: ['expired_at', 'i'] }], 2: ['context_menu', 's', 'list'], 3: ['min_version', 'i'], 4: ['extra', 's', 'map'] }
+const BUTTON: Spec = { 1: ['text', TEXT], 4: ['link_info', LINK] }
+const BASE: Spec = { 200: ['req_base', REQ], 201: ['resp_base', RESP] }
+const BASE2: Spec = { 201: ['req_base', REQ], 202: ['resp_base', RESP] }
+
+const CONTENT: Spec = {
+  2: ['image_card', { 1: ['title', { 1: ['image', IMAGE], 2: ['title', TEXT], 3: ['subtitle', TEXT], 4: ['button', BUTTON] }], 2: ['videos', VIDEO, 'list'], 3: ['link_info', LINK], 4: ['preview_hint', HINT], ...BASE }],
+  4: ['picture_card', { 1: ['image', IMAGE], 2: ['thumbnail', IMAGE], 3: ['preview_hint', HINT], 4: ['link_info', LINK], 5: ['fallback', FALLBACK], 6: ['image_mint', IMAGE], 7: ['thumbnail_mint', IMAGE], ...BASE }],
+  5: ['video_card', { 1: ['video', VIDEO], 2: ['preview_hint', HINT], 3: ['link_info', LINK], 4: ['fallback', FALLBACK], 5: ['user_info', USER], 6: ['top_inline_text', TEXT], ...BASE }],
+  6: ['info_card', { 1: ['title', { 1: ['title', TEXT], 2: ['image', IMAGE] }], 2: ['content', { 1: ['description', TEXT], 2: ['contents', TEXT, 'list'] }], 3: ['video', VIDEO], 4: ['buttons', { 1: ['text', TEXT], 2: ['hint', TEXT], 3: ['link', LINK], 4: ['type', 'i'] }, 'list'], 6: ['link_info', LINK], ...BASE }],
+  7: ['sticker_card', {
+    1: ['sticker', IMAGE], 2: ['preview_hint', HINT], 3: ['fallback', { 1: ['placeholder', IMAGE] }], 4: ['creator', { 1: ['user_id', 'i'], 2: ['nick_name', 's'], 3: ['avatar_thumb', IMAGE] }],
+    10: ['attachment', { 1: ['type', 'i'], 2: ['id', 's'], 3: ['uid', 'i'], 4: ['cover', { 1: ['uri', 's'], 2: ['url_list', 's', 'list'] }], 20: ['aweme_type', 'i'], 21: ['is_story', 'i'] }],
+    11: ['sticker_biz_type', 's'], ...BASE
+  }],
+  14: ['audio_card', { 101: ['fallback_info', FALLBACK], 102: ['preview_hint', HINT], ...BASE }],
+  100: ['common_msg_card', {
+    1: ['text_map', TEXT, 'map'], 2: ['image_map', IMAGE, 'map'], 3: ['link_map', LINK, 'map'], 4: ['button_map', BUTTON, 'map'], 5: ['video_map', VIDEO, 'map'], 6: ['user_map', USER, 'map'],
+    7: ['fallback_info', FALLBACK], 8: ['preview_hint', HINT], 100: ['business_image_map', IMAGE, 'map'], 101: ['business_video_map', VIDEO, 'map'], 102: ['business_user_map', USER, 'map'], ...BASE2
+  }],
+  101: ['dynamic_card', { 1: ['dynamic_info', { 1: ['card_key', 's'], 2: ['schema', 's'], 3: ['card_template', 's'], 4: ['business_type', 's'], 5: ['business_id', 's'], 9: ['raw_data', 's'] }], 10: ['fallback_info', FALLBACK], 11: ['preview_hint', HINT], ...BASE2 }],
+  200: ['streak_cmd', { 1: ['cmd_type', 'i'], 3: ['streak_action', 'i'] }]
+}
+const MEDIA: Spec = {
+  1: ['id', 's'], 2: ['type', 'i'], 3: ['decrypt_key', 's'],
+  20: ['url_info_list', { 1: ['display_type', 's'], 2: ['url_list', 's', 'list'], 3: ['video_model', 's'], 20: ['width', 'i'], 21: ['height', 'i'], 22: ['duration', 'i'], 23: ['size', 'i'], 24: ['name', 's'], 25: ['codec', 's'] }, 'list']
+}
+
+const intOf = (v: bigint): number | string => (v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : String(v))
+const valueOf = (kind: Scalar | Spec, v: Raw): unknown => {
+  if (kind === 's') return typeof v === 'bigint' ? String(v) : td.decode(v)
+  if (kind === 'i') return typeof v === 'bigint' ? intOf(v) : `bytes(${v.length})`
+  return v instanceof Uint8Array ? read(kind, v) : intOf(v)
+}
+/** One message level by its spec. A field the spec does not name stays as `f<number>`, so nothing goes missing without a trace. */
+function read(spec: Spec, buf: Uint8Array): Json {
+  const out: Json = {}
+  for (const f of decode(buf)) {
+    const s = spec[f.no]
+    if (!s) { out['f' + f.no] = typeof f.v === 'bigint' ? intOf(f.v) : `bytes(${f.v.length})`; continue }
+    const [name, kind, mode] = s
+    if (mode === 'list') {
+      const list = (out[name] ??= []) as unknown[]
+      list.push(valueOf(kind, f.v))
+    } else if (mode === 'map') {
+      const kv = asMsg(f.v)
+      const map = (out[name] ??= {}) as Json
+      const val = get(kv, 2)
+      if (val !== undefined) map[asStr(get(kv, 1))] = valueOf(kind, val)
+    } else out[name] = valueOf(kind, f.v)
+  }
+  return out
+}
+
+export interface Card { kind: string; value: Json }
+/** The card of a template message (sticker, photo, video, voice...), or nothing when there is none or it cannot be read. */
+export function cardOf(m: ImMessage): Card | undefined {
+  const raw = m.other.find((f) => f.no === 20)?.v
+  if (!(raw instanceof Uint8Array) || !raw.length) return
+  try {
+    const all = read(CONTENT, raw)
+    const kind = Object.keys(all).find((k) => k.endsWith('_card') || k === 'streak_cmd')
+    return kind ? { kind, value: all[kind] as Json } : { kind: 'unknown', value: all }
+  } catch { return undefined }
+}
+
+export interface MediaFile { type: number; key: string; urls: { urls: string[]; model: string; name: string }[] }
+/** Files attached to a message (field 24): voice messages and other media live here. */
+export function mediaInfoOf(m: ImMessage): MediaFile[] {
+  const out: MediaFile[] = []
+  for (const f of m.other) {
+    if (f.no !== 24 || !(f.v instanceof Uint8Array)) continue
+    try {
+      const j = read(MEDIA, f.v)
+      const list = (j.url_info_list ?? []) as Json[]
+      out.push({
+        type: Number(j.type ?? 0), key: String(j.decrypt_key ?? ''),
+        urls: list.map((u) => ({ urls: (u.url_list ?? []) as string[], model: String(u.video_model ?? ''), name: String(u.name ?? '') }))
+      })
+    } catch { /* stays among the unknown fields */ }
+  }
+  return out
+}
+
+export interface Reference { id: string; hint: string; type: number; status: number; sender: string }
+/** What a reply quotes (field 18). `status`: 0 available, 1 gone, 2 not visible, 3 recalled, 4 deleted. */
+export function referenceOf(m: ImMessage): Reference | undefined {
+  const raw = m.other.find((f) => f.no === 18)?.v
+  if (!(raw instanceof Uint8Array)) return
+  try {
+    const r = decode(raw)
+    const id = asInt(get(r, 1))
+    if (!id) return
+    return { id: String(id), hint: asStr(get(r, 2)), type: Number(asInt(get(r, 3))), status: Number(asInt(get(r, 4))), sender: String(asInt(get(r, 7))) }
+  } catch { return undefined }
+}
+
+export interface Property { key: string; items: { uid: string; time: number }[] }
+/** Reactions and other per-user marks (field 15): a map from a key like `e:💔` to who set it and when. Repeats of a key are merged. */
+export function propertiesOf(m: ImMessage): Property[] {
+  const byKey = new Map<string, Property>()
+  for (const f of m.other) {
+    if (f.no !== 15 || !(f.v instanceof Uint8Array)) continue
+    try {
+      const entry = decode(f.v)
+      const key = asStr(get(entry, 1))
+      if (!key) continue
+      const p = byKey.get(key) ?? { key, items: [] }
+      byKey.set(key, p)
+      for (const item of getAll(asMsg(get(entry, 2)), 1)) {
+        const x = asMsg(item)
+        p.items.push({ uid: String(asInt(get(x, 1))), time: Number(asInt(get(x, 3))) })
+      }
+    } catch { /* stays among the unknown fields */ }
+  }
+  return [...byKey.values()]
+}

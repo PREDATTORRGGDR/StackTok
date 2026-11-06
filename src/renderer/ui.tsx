@@ -31,7 +31,7 @@ export function Modal({ children, onClose, wide }: { children: ReactNode; onClos
 }
 
 export const statusText = (a: { session: string; verified: boolean; username?: string }) =>
-  a.session === 'logged_in' ? (a.verified ? (a.username ? '@' + a.username : 'Р’С…РѕРґ РІС‹РїРѕР»РЅРµРЅ') : 'РќСѓР¶РЅРѕ РїРѕРґС‚РІРµСЂРґРёС‚СЊ') : 'РќРµ Р°РІС‚РѕСЂРёР·РѕРІР°РЅ'
+  a.session === 'logged_in' ? (a.verified ? (a.username ? '@' + a.username : 'Вход выполнен') : 'Нужно подтвердить') : 'Не авторизован'
 
 /** Our own dropdown instead of the native <select>: the system list is white, unthemed and ignores the glass look. */
 export function Select({ value, options, onChange, align = 'left', label }: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void; align?: 'left' | 'right'; label?: string }) {
