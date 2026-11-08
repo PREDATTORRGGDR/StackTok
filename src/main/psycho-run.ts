@@ -204,8 +204,9 @@ const FRAME_MAX_BYTES = 9_000_000
 export async function runPortrait(a: RunArgs): Promise<PsyJob> {
   const { job } = a
   const set = (p: Partial<PsyJob>) => { Object.assign(job, p); a.onChange() }
-  const fail = (message: string) => { set({ status: 'stopped', message, finishedAt: Date.now() }); return job }
   const vlm = new Vlm(a.provider, a.fetchFn)
+  const tok = (): Partial<PsyJob> => ({ tokens: vlm.usage.inTok + vlm.usage.outTok, inTok: vlm.usage.inTok, outTok: vlm.usage.outTok, calls: vlm.usage.calls }) // the app's usage counter reads the split
+  const fail = (message: string) => { set({ status: 'stopped', message, finishedAt: Date.now(), ...tok() }); return job }
   try {
     if (!a.wc.getURL().startsWith(a.base)) await a.wc.loadURL(a.base + '/').catch(() => {})
     let me: { uniqueId: string; secUid: string } | null
@@ -237,21 +238,52 @@ export async function runPortrait(a: RunArgs): Promise<PsyJob> {
         try { return (await js<string[]>(a.wc, grabFrames, { url: it.play, marks: [0.35, 0.7], maxBytes: FRAME_MAX_BYTES })).map((b64) => ({ media: 'image/jpeg', b64 })) } finally { free() }
       } : undefined,
       vlm,
-      progress: (p) => set({ phase: p.phase, done: p.done, total: p.total, message: p.message, tokens: vlm.usage.inTok + vlm.usage.outTok }),
+      progress: (p) => set({ phase: p.phase, done: p.done, total: p.total, message: p.message, ...tok() }),
       cancelled: a.cancelled
     }
     const res = await analyze(deps, { limit: a.limit, frames: a.frames, visionModel: a.visionModel, synthModel: a.synthModel, subject: a.subject })
 
-    set({ phase: 'save', message: 'Собираю презентацию…', tokens: vlm.usage.inTok + vlm.usage.outTok })
+    set({ phase: 'save', message: 'Собираю презентацию…', ...tok() })
     const thumbs = new Map<number, string>()
     const want = new Set(res.report.evidence.map((e) => e.i))
     for (const [i, c] of res.covers) if (c.thumb && (want.has(i) || thumbs.size < 60)) thumbs.set(i, c.thumb)
     const html = renderDeck({ owner: a.owner, report: res.report, stats: res.stats, items: res.items, thumbs, warnings: res.warnings, generatedAt: Date.now() })
     const path = a.path
     await writeFile(path, html, 'utf8')
-    set({ status: 'done', message: res.warnings.length ? res.warnings.join(' ') : 'Презентация готова.', path, finishedAt: Date.now(), tokens: vlm.usage.inTok + vlm.usage.outTok })
+    set({ status: 'done', message: res.warnings.length ? res.warnings.join(' ') : 'Презентация готова.', path, finishedAt: Date.now(), ...tok() })
     return job
   } catch (e) {
     return fail(e instanceof PsyError ? e.message : `Ошибка: ${(e as Error).message}`)
+  }
+}
+
+/**
+ * Several API keys, one per profile id, in one OS-encrypted file. The key saved before profiles existed
+ * (`psy-key.bin`) moves into the profile `legacyId` once. Without OS encryption nothing is saved.
+ */
+export class KeyRing {
+  private keys: Record<string, string> = {}
+  constructor(private file: string, legacy?: { file: string; id: string }) {
+    try { if (existsSync(file) && safeStorage.isEncryptionAvailable()) this.keys = JSON.parse(safeStorage.decryptString(readFileSync(file))) ?? {} } catch { this.keys = {} }
+    if (legacy && existsSync(legacy.file)) {
+      const old = new KeyBox(legacy.file).get()
+      if (old && !this.keys[legacy.id]) { try { this.set(legacy.id, old) } catch { return } }
+      if (this.keys[legacy.id] === old) rmSync(legacy.file, { force: true })
+    }
+  }
+  has(id: string): boolean { return typeof this.keys[id] === 'string' && !!this.keys[id] }
+  get(id: string): string | null { return this.has(id) ? this.keys[id] : null }
+  ids(): string[] { return Object.keys(this.keys).filter((k) => this.has(k)) }
+  set(id: string, key: string): void {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Система не даёт зашифровать ключ, поэтому он не сохранён.')
+    this.keys = { ...this.keys, [id]: key }
+    this.write()
+  }
+  clear(id: string): void { const { [id]: _, ...rest } = this.keys; this.keys = rest; this.write() }
+  private write() {
+    if (!Object.keys(this.keys).length) { rmSync(this.file, { force: true }); return }
+    mkdirSync(dirname(this.file), { recursive: true })
+    writeFileSync(this.file + '.tmp', safeStorage.encryptString(JSON.stringify(this.keys)))
+    renameSync(this.file + '.tmp', this.file)
   }
 }

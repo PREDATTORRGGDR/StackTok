@@ -65,17 +65,35 @@ export interface Settings {
   chatDim: number // 0..100, how dark the wallpaper is under the glass
   chatPrivacy: boolean // blur names, previews and messages until the mouse is over them
   chatTextSize: (typeof CHAT_TEXT_SIZES)[number]
-  psyPreset: (typeof PSY_PRESETS)[number] // which provider reads covers and writes the portrait (the API key itself lives only in main)
-  psyBase: string // address for 'custom'
-  psyVision: string // model that reads covers; '' = the preset's own
-  psySynth: string // model that writes the portrait; '' = the preset's own
+  apiProfiles: ApiProfile[] // model providers with their own keys (the keys themselves live only in main)
+  apiActive: string // id of the profile the portrait and the assistant use
 }
+
+/** One connected model API. The key is stored encrypted in main by `id`; the UI only learns whether there is one. */
+export interface ApiProfile {
+  id: string
+  name: string
+  preset: (typeof PSY_PRESETS)[number]
+  base: string // address for 'custom'
+  vision: string // model that reads covers and chat pictures; '' = the preset's own
+  synth: string // model that writes the portrait; '' = the preset's own
+  assist: string // model of the chat assistant; '' = the portrait's model
+}
+export const API_PROFILES_MAX = 12
+export const newProfile = (id: string, name = 'Основной'): ApiProfile => ({ id, name, preset: 'anthropic', base: '', vision: '', synth: '', assist: '' })
+/** The profile in use: the chosen one, else the first. */
+export const activeProfile = (s: Pick<Settings, 'apiProfiles' | 'apiActive'>): ApiProfile => s.apiProfiles.find((p) => p.id === s.apiActive) ?? s.apiProfiles[0] ?? newProfile('main')
+/** Tokens spent through the app with one profile, as the provider reported them. */
+export interface ApiUsage { inTok: number; outTok: number; requests: number; since: number }
+/** What a check of a key found: does the provider take it, and what is left on it (if the provider tells). */
+export interface ApiCheck { key: 'ok' | 'bad' | 'unknown'; models?: number; balance?: string; note?: string; at: number }
 
 export interface Data {
   version: 1
   accounts: Account[]
   settings: Settings
   activeAccountId?: string
+  apiUsage: Record<string, ApiUsage> // by profile id
 }
 
 export interface Bounds { x: number; y: number; width: number; height: number }
@@ -186,6 +204,35 @@ export function cleanRange(r: unknown): ChatRange {
 
 export interface ChatExportProgress { phase: 'loading' | 'reading' | 'media' | 'saving'; done: number; total?: number }
 
+/** The chat assistant as the UI sees it. The transcript itself stays in main. */
+export interface AssistTurnView { role: 'user' | 'assistant'; text: string; error?: boolean }
+export interface AssistState {
+  status: 'idle' | 'loading' | 'thinking'
+  partner?: string // name of the person the loaded chat is with
+  handle?: string
+  messages: number // messages in the context
+  cut: number // older loaded messages that did not fit
+  first?: string // first day in the context (dd.mm.yyyy)
+  last?: string
+  complete: boolean // the context starts at the very beginning of the chat
+  loadedAt?: number
+  loading?: string // what loading is doing now
+  pictures: number // stickers, photos and covers described for the model
+  warnings: string[]
+  turns: AssistTurnView[]
+  tokens: number
+  model: string
+  talkId?: string // the conversation shown, if it is saved
+  talkPartner?: string // whom that conversation is about
+  canAsk: boolean // a chat is loaded and the shown conversation is about it
+  history: AssistTalkInfo[] // saved conversations, newest first
+  historySaved: boolean // false: the system cannot encrypt, history lives only until the app closes
+}
+/** One saved conversation with the assistant, as listed in the panel. */
+export interface AssistTalkInfo { id: string; title: string; partner: string; handle?: string; accountId: string; updatedAt: number; turns: number; here: boolean }
+/** Messages to load into the assistant's context; 0 = the whole chat. */
+export const ASSIST_COUNTS = [100, 300, 1000, 0] as const
+
 /** Progress of a repost portrait (VLM analysis), pushed to the UI with every change. */
 export interface PsyJob {
   accountId: string
@@ -199,6 +246,9 @@ export interface PsyJob {
   path?: string // where the finished presentation was saved
   target?: string // @name of a profile that is not one of the app's accounts
   tokens: number
+  inTok?: number // the provider's own split, for the usage counter in «Настройки»
+  outTok?: number
+  calls?: number
 }
 
 /** What the account statistics window shows. Never holds contact details or session values. */

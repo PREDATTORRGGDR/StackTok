@@ -253,7 +253,7 @@ export function App() {
           </header>
           <div className={'content' + (page === 'browse' || page === 'downloader' ? ' frame-wrap' : '')}>
             {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={open} />}
-            {page === 'browse' && <Browse active={active} go={setPage} openDialog={open} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} />}
+            {page === 'browse' && <Browse active={active} go={setPage} openDialog={open} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} assist={s.assist} hasKey={s.hasPsyKey} />}
             {page === 'tools' && <ToolsPage s={s} active={active} go={setPage} openDialog={open} />}
             {page === 'downloader' && <DownloaderPage />}
             {page === 'settings' && <SettingsPage s={s} />}

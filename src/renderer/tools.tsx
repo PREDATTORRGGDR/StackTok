@@ -1,9 +1,10 @@
 import { ReactNode } from 'react'
-import { BarChart3, Clapperboard, Download, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
+import { BarChart3, Bot, Clapperboard, Download, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call, toast } from './api'
 import type { Dialog } from './Dialogs'
 import type { Page } from './App'
+import { openAssist } from './AssistPanel'
 
 /** Everything a tool may need when it is started from the Tools page. */
 export interface ToolCtx { s: AppState; acct?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void }
@@ -59,6 +60,13 @@ export const TOOLS: Tool[] = [
     desc: 'Страница сообщений аккаунта с обоями и стеклом. Оформление настраивается на странице «Настройки».',
     blocked: needLogin,
     run: (c) => { call('account:page', { id: c.acct!.id, value: 'chats' }); c.go('browse') }
+  },
+  {
+    id: 'assist', group: 'Чаты', title: 'Помощник по переписке', icon: <Bot size={20} />,
+    desc: 'Мини-GPT, который знает открытый диалог: время ответов, настроение, стикеры и обложки видео. Подскажет, что происходит и как ответить, готовыми сообщениями в вашем стиле.',
+    blocked: (c) => needLogin(c) ?? (c.s.hasPsyKey ? null : 'Нужен ключ API в «Настройках»'),
+    busy: (c) => c.s.assist.status !== 'idle',
+    run: (c) => { openAssist(); call('account:page', { id: c.acct!.id, value: 'chats' }); c.go('browse') }
   },
   {
     id: 'chat-export', group: 'Чаты', title: 'Экспорт чата в HTML', icon: <FileDown size={20} />,

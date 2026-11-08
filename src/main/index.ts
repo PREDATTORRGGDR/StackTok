@@ -2,19 +2,22 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electro
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
 import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
 import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
 import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
-import { ChatDump, renderChatHtml } from './chat-export-html'
+import { ChatDump, ExportEntry, Person, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
+import { AssistTurn, Transcript, questionOf, streamReply, systemPrompt, titleOf, transcriptOf } from './chat-assist'
+import { TalkBox, lookAt } from './chat-assist-run'
 import type { RepostCleaner } from './repost-cleaner'
 import { findReposts } from './reposts'
 import { Sweeper, cleanChoice, linkOf, pick } from './sweep'
 import { findSweep } from './sweep-run'
-import { parseHandle, profileOf } from './psycho'
-import { KeyBox, runPortrait } from './psycho-run'
+import { Provider, PsyError, Vlm, parseHandle, profileOf } from './psycho'
+import { KeyRing, runPortrait } from './psycho-run'
+import { baseOf, checkKey } from './api-check'
 import { Downloader } from './downloader'
 import { Store } from './store'
 
@@ -33,7 +36,34 @@ let chatExport: { progress: ChatExportProgress; cancelled: boolean } | null = nu
 let reposts: { job: Job; cleaner?: RepostCleaner; stop: boolean } | null = null // at most one repost cleanup at a time
 let sweep: { job: SweepJob; sweeper?: Sweeper; stop: boolean } | null = null // at most one cleanup of likes, favorites or following at a time
 let psy: { job: PsyJob; stop: boolean } | null = null // at most one repost portrait at a time
-let keybox: KeyBox
+let keys: KeyRing // API keys by profile id, OS-encrypted
+const checks: Record<string, ApiCheck> = {} // last key check per profile (memory only)
+// The chat assistant: the loaded conversation stays here (memory only, never on disk); the UI gets only `view`.
+const freshAssist = (): AssistState => ({ status: 'idle', messages: 0, cut: 0, complete: false, warnings: [], turns: [], tokens: 0, model: '', pictures: 0, history: [], canAsk: false, historySaved: true })
+interface AssistRun { view: AssistState; talkId?: string; accountId?: string; chat?: string; entries?: ExportEntry[]; ctx?: { partner: Person; owner: Person; t: Transcript; complete: boolean }; looks: Map<string, string>; abort?: AbortController; cancelLoad: boolean }
+let assist: AssistRun = { view: freshAssist(), looks: new Map(), cancelLoad: false }
+let talks: TalkBox // conversations with the assistant, encrypted on disk
+/** What the UI shows of the assistant: its state plus the list of saved conversations (titles only). */
+function assistView(): AssistState {
+  const talk = talks?.get(assist.talkId)
+  return {
+    ...assist.view, talkId: assist.talkId, talkPartner: talk?.partner,
+    canAsk: !!assist.ctx && (!talk || talk.chat === assist.chat),
+    historySaved: talks?.saves ?? true,
+    history: (talks?.list ?? []).map((t) => ({ id: t.id, title: t.title, partner: t.partner, handle: t.handle, accountId: t.accountId, updatedAt: t.updatedAt, turns: t.turns.length, here: t.chat === assist.chat }))
+  }
+}
+/** Writes the current conversation into the history (a new entry on its first question). */
+function saveTalk(run: AssistRun) {
+  if (!run.chat || !run.view.turns.some((t) => t.role === 'user')) return
+  const old = talks.get(run.talkId)
+  run.talkId ??= randomUUID()
+  talks.put({
+    id: run.talkId, chat: old?.chat ?? run.chat, accountId: old?.accountId ?? run.accountId ?? '', partner: old?.partner ?? run.view.partner ?? '', handle: old?.handle ?? run.view.handle,
+    title: old?.title ?? titleOf(run.view.turns.find((t) => t.role === 'user')!.text), createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now(),
+    turns: run.view.turns.filter((t) => t.text).map((t) => ({ role: t.role, text: t.text, ...(t.error ? { error: true } : {}) }))
+  })
+}
 
 // ---------- validation ----------
 const isStr = (v: unknown, max = 500): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -72,7 +102,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, hasPsyKey: keybox?.has() ?? false, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
 }
 
 let pushing = false
@@ -112,6 +142,66 @@ function stopReposts() {
   if (!reposts) return
   reposts.stop = true
   reposts.cleaner?.stop()
+}
+
+function forgetAssist(accountId?: string) {
+  if (accountId) talks.remove((t) => t.accountId === accountId) // the account is gone: so is the advice about its chats
+  if (accountId && assist.accountId !== accountId) return
+  assist.abort?.abort()
+  assist.cancelLoad = true
+  assist = { view: freshAssist(), looks: new Map(), cancelLoad: false }
+}
+
+/** The model API of the active profile in «Настройки» (shared by the portrait and the chat assistant). Throws a user-facing message. */
+function modelApi(): { provider: Provider; prof: ApiProfile; vision: string; synth: string; assist: string } {
+  const prof = activeProfile(store.data.settings)
+  const key = keys.get(prof.id)
+  need(!!key, `Сначала сохраните ключ API для «${prof.name}» в «Настройках».`)
+  const pre = PSY_PRESET_INFO[prof.preset]
+  need(prof.preset !== 'anthropic' || key!.startsWith('sk-ant-'), 'Это не ключ Anthropic (у них он начинается с sk-ant-). Если ключ от шлюза или перепродавца, выберите в «Настройках» «Свой адрес» и впишите адрес из его инструкции.')
+  const base = baseOf(prof)
+  need(/^https:\/\/[^\s]+$/.test(base) || /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(base), 'Укажите адрес API (https://…) в «Настройках».')
+  const synth = prof.synth || pre.synth
+  return { provider: { kind: pre.kind, base, key: key! }, prof, vision: prof.vision || pre.vision, synth, assist: prof.assist || synth }
+}
+
+/** Counts what a profile spent through the app (the provider's own numbers from each answer). */
+function spend(id: string, inTok: number, outTok: number, requests = 1) {
+  if (!inTok && !outTok) return
+  const u = store.data.apiUsage[id] ?? { inTok: 0, outTok: 0, requests: 0, since: Date.now() }
+  store.data.apiUsage[id] = { ...u, inTok: u.inTok + inTok, outTok: u.outTok + outTok, requests: u.requests + requests }
+  store.save()
+}
+
+/** Puts the loaded chat (with picture descriptions) into the prompt context. */
+function buildContext(run: AssistRun) {
+  if (!run.entries || !run.ctx) return
+  const t = transcriptOf(run.entries, run.ctx.partner, run.looks)
+  run.ctx = { ...run.ctx, t }
+  run.view = { ...run.view, messages: t.messages, cut: t.cut, first: t.first, last: t.last, complete: run.ctx.complete && !t.cut }
+}
+
+function profile(id: unknown): ApiProfile {
+  const p = store.data.settings.apiProfiles.find((x) => x.id === id)
+  if (!p) throw new Error('Неизвестный ключ.')
+  return p
+}
+function setKey(id: string, key: unknown) {
+  if (key === null) keys.clear(id)
+  else { need(isStr(key, 400) && !/\s/.test(key), 'Ключ выглядит неверно.'); keys.set(id, key.trim()) }
+  delete checks[id]
+  push()
+}
+/** Changes a profile from untrusted input: only known fields, known presets, bounded strings. */
+function editProfile(id: string, patch: Record<string, unknown>) {
+  const p = profile(id)
+  const s = (v: unknown, n: number) => (typeof v === 'string' && v.length <= n ? v.trim() : undefined)
+  const name = s(patch.name, 40)
+  if (name) p.name = name
+  if (PSY_PRESETS.includes(patch.preset as any)) p.preset = patch.preset as ApiProfile['preset']
+  for (const [k, n] of [['base', 200], ['vision', 100], ['synth', 100], ['assist', 100]] as const) { const v = s(patch[k], n); if (v !== undefined) p[k] = v }
+  delete checks[id]
+  store.save()
 }
 
 function stopSweep() {
@@ -176,6 +266,7 @@ const handlers: Record<string, Handler> = {
     if (reposts?.job.accountId === acc.id) stopReposts()
     if (sweep?.job.accountId === acc.id) stopSweep()
     if (psy?.job.accountId === acc.id) psy.stop = true
+    forgetAssist(acc.id)
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
     store.data.accounts = store.data.accounts.filter((x) => x.id !== acc.id)
@@ -187,6 +278,7 @@ const handlers: Record<string, Handler> = {
     if (reposts?.job.accountId === acc.id) stopReposts()
     if (sweep?.job.accountId === acc.id) stopSweep()
     if (psy?.job.accountId === acc.id) psy.stop = true
+    forgetAssist(acc.id)
     await browse.wipe(acc.id)
     acc.verified = false
     store.save(); push()
@@ -253,10 +345,8 @@ const handlers: Record<string, Handler> = {
     if (typeof s?.chatPrivacy === 'boolean') cur.chatPrivacy = s.chatPrivacy
     if (typeof s?.chatDim === 'number' && Number.isFinite(s.chatDim)) cur.chatDim = Math.min(100, Math.max(0, Math.round(s.chatDim)))
     if (CHAT_TEXT_SIZES.includes(s?.chatTextSize as any)) cur.chatTextSize = s.chatTextSize!
-    if (PSY_PRESETS.includes(s?.psyPreset as any)) cur.psyPreset = s.psyPreset!
-    if (typeof s?.psyBase === 'string' && s.psyBase.length <= 200) cur.psyBase = s.psyBase.trim()
-    if (typeof s?.psyVision === 'string' && s.psyVision.length <= 100) cur.psyVision = s.psyVision.trim()
-    if (typeof s?.psySynth === 'string' && s.psySynth.length <= 100) cur.psySynth = s.psySynth.trim()
+    const old = s as Record<string, unknown> // settings from before profiles: they change the active profile (tests use them)
+    if (old?.psyPreset !== undefined || old?.psyBase !== undefined) editProfile(activeProfile(cur).id, { preset: old.psyPreset, base: old.psyBase, vision: old.psyVision, synth: old.psySynth })
     if (CHAT_WALLPAPERS.includes(s?.chatWallpaper as any) && (s.chatWallpaper !== 'custom' || overlay.hasImage())) cur.chatWallpaper = s.chatWallpaper!
     applyBackground()
     overlay.refresh()
@@ -277,6 +367,7 @@ const handlers: Record<string, Handler> = {
   // The user asked for this export: reads the chat that is open in the active account's view and writes one HTML file where they choose.
   'chat:export': async (a?: { range?: unknown }) => {
     need(!chatExport, 'Экспорт уже идёт.')
+    need(assist.view.status !== 'loading', 'Дождитесь, пока помощник загрузит переписку.')
     const range = cleanRange(a?.range)
     const acc = account(store.data.activeAccountId)
     const target = browse.chatTarget(acc.id)
@@ -397,11 +488,168 @@ const handlers: Record<string, Handler> = {
     return run!.sweeper!.gone.length
   },
   // The key goes to an OS-encrypted file in main; the UI only ever learns whether one is saved.
-  'psy:key': (a: { key: string | null }) => {
-    if (a?.key === null) keybox.clear()
-    else { need(isStr(a?.key, 400) && !/\s/.test(a.key), 'Ключ выглядит неверно.'); keybox.set(a.key.trim()) }
+  // The user pressed «Загрузить» in the assistant: reads the chat open in the active account's view into memory (nothing is saved),
+  // then the cheap model describes its newest pictures once (stickers, photos, video covers), so questions carry only words.
+  'assist:load': async (a?: { count?: number; pictures?: boolean }) => {
+    need(assist.view.status === 'idle', 'Помощник занят.')
+    need(!chatExport, 'Дождитесь конца экспорта чата.')
+    const count = typeof a?.count === 'number' && Number.isInteger(a.count) && a.count >= 0 ? Math.min(a.count, 1_000_000) : 300
+    const acc = account(store.data.activeAccountId)
+    need(sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
+    const target = browse.chatTarget(acc.id)
+    if (!target) throw new Error('Откройте чат этого аккаунта на вкладке «Обзор».')
+    const info = await chatInfo(target.wc)
+    const chat = acc.id + '|' + info.name + '|' + info.handle
+    const run = assist
+    if (run.chat !== chat) run.looks = new Map()
+    run.cancelLoad = false
+    run.view = { ...run.view, status: 'loading', loading: 'Загружаю переписку…' }
+    push()
+    target.hold()
+    const warnings: string[] = []
+    try {
+      const got = await collectChat(target.wc, {
+        cancelled: () => run.cancelLoad,
+        progress: (p) => { run.view.loading = p.phase === 'loading' ? `Загружаю историю: ${p.done} сообщений…` : p.phase === 'reading' ? `Читаю сообщения: ${p.done}${p.total ? ' из ' + p.total : ''}…` : 'Готовлю контекст…'; push() }
+      }, count ? { mode: 'last', count } : { mode: 'all' })
+      if (run !== assist) return null // forgotten while loading
+      const keep = run.talkId ? talks.get(run.talkId)?.chat === chat : run.chat === chat
+      if (!keep) run.talkId = undefined
+      run.accountId = acc.id
+      run.chat = chat
+      run.entries = got.entries
+      run.ctx = { partner: got.partner, owner: { name: acc.label, handle: acc.username }, t: transcriptOf([], got.partner), complete: got.complete }
+      warnings.push(...got.warnings.filter((w) => !/^Файл собран/.test(w)).map((w) => w.replace(/в файл[ае]?|в файле/g, 'в контексте')))
+      if (a?.pictures !== false && keys.has(activeProfile(store.data.settings).id)) {
+        try {
+          const { provider, prof, vision: model } = modelApi()
+          const vlm = new Vlm(provider)
+          run.view.loading = 'Смотрю стикеры, фото и обложки…'
+          push()
+          const r = await lookAt(got.entries, {
+            ses: target.ses, vlm, model, looks: run.looks, devOrigin: DEV ? new URL(HOME_URL).origin : undefined, cancelled: () => run.cancelLoad,
+            progress: (d, t) => { run.view.loading = `Смотрю стикеры, фото и обложки: ${d} из ${t}…`; push() }
+          })
+          run.view.tokens += vlm.usage.inTok + vlm.usage.outTok
+          spend(prof.id, vlm.usage.inTok, vlm.usage.outTok, vlm.usage.calls)
+          if (r.failed && r.described === 0) warnings.push('Картинки не удалось разобрать: помощник видит только подписи к ним.')
+        } catch (e) {
+          warnings.push(`Картинки не разобраны: ${(e as Error).message}`)
+        }
+      }
+      run.view = { ...run.view, status: 'idle', loading: undefined, partner: got.partner.name || info.name, handle: got.partner.handle || info.handle, loadedAt: Date.now(), turns: keep ? run.view.turns : [], pictures: run.looks.size, warnings }
+      buildContext(run)
+      if (run.view.cut) run.view.warnings.unshift(`Переписка длинная: в контекст вошли последние ${run.view.messages} сообщений, ещё ${run.view.cut} не поместились (так дешевле).`)
+      return { messages: run.view.messages }
+    } catch (e) {
+      if (run === assist) run.view = { ...run.view, status: 'idle', loading: undefined }
+      throw new Error(run.cancelLoad ? 'Загрузка остановлена.' : 'Не удалось загрузить переписку: ' + (e as Error).message)
+    } finally {
+      target.release()
+      push()
+    }
+  },
+  // A question to the assistant: the loaded transcript and the last turns go to the model chosen in «Настройки». Nothing is sent to TikTok.
+  'assist:ask': (a: { text: string }) => {
+    need(isStr(a?.text, 8000), 'Напишите вопрос.')
+    need(assist.view.status === 'idle', 'Помощник занят.')
+    need(!!assist.ctx, 'Сначала загрузите переписку.')
+    const open = talks.get(assist.talkId)
+    need(!open || open.chat === assist.chat, `Этот разговор о переписке с ${open?.partner || 'другим человеком'}. Откройте тот диалог и загрузите его, или начните новый разговор.`)
+    const { provider, prof, assist: model } = modelApi()
+    need(!!model, 'Укажите модель в «Настройках».')
+    const run = assist
+    const text = a.text.trim()
+    const history: AssistTurn[] = run.view.turns.filter((t) => !t.error && t.text).map((t) => ({ role: t.role, text: t.text }))
+    history.push({ role: 'user', text: questionOf(text) })
+    const answer: { role: 'assistant'; text: string; error?: boolean } = { role: 'assistant', text: '' }
+    run.view = { ...run.view, status: 'thinking', model, turns: [...run.view.turns, { role: 'user', text }, answer] }
+    const abort = new AbortController()
+    run.abort = abort
+    let timer: NodeJS.Timeout | undefined
+    const flush = () => { timer = undefined; push() }
+    push()
+    void streamReply(provider, model, systemPrompt(run.ctx!), history, (t) => {
+      answer.text = t
+      timer ??= setTimeout(flush, 60) // pieces arrive dozens a second: a few UI updates are enough
+    }, abort.signal).then((r) => {
+      answer.text = r.text
+      run.view.tokens += r.inTok + r.outTok
+      spend(prof.id, r.inTok, r.outTok)
+    }, (e: unknown) => {
+      const msg = (e as Error).message
+      if (answer.text && e instanceof PsyError && /Остановлено/.test(msg)) return
+      if (answer.text) answer.text += '\n\n— ' + msg
+      else { answer.text = msg; answer.error = true }
+    }).finally(() => {
+      if (timer) clearTimeout(timer)
+      if (run === assist) { run.view.status = 'idle'; run.abort = undefined; run.view = { ...run.view, turns: [...run.view.turns] }; saveTalk(run) }
+      push()
+    })
+    return true
+  },
+  'assist:stop': () => { assist.cancelLoad = true; assist.abort?.abort(); push() },
+  // A new conversation about the same chat, or forget the chat entirely.
+  'assist:reset': () => { if (assist.view.status === 'idle') { assist.talkId = undefined; assist.view = { ...assist.view, turns: [] }; push() } },
+  'assist:forget': () => { forgetAssist(); push() },
+  // History: open an earlier conversation (to read it, or to go on if its chat is the loaded one), delete one or all.
+  'assist:open': (a: { id: string }) => {
+    need(assist.view.status !== 'thinking', 'Дождитесь конца ответа.')
+    const t = talks.get(a?.id)
+    need(!!t, 'Разговор не найден.')
+    assist.talkId = t!.id
+    assist.view = { ...assist.view, turns: t!.turns.map((x) => ({ ...x })) }
     push()
   },
+  'assist:delete': (a: { id: string }) => {
+    need(typeof a?.id === 'string', 'Bad value.')
+    if (assist.talkId === a.id && assist.view.status === 'thinking') throw new Error('Дождитесь конца ответа.')
+    talks.remove((t) => t.id === a.id)
+    if (assist.talkId === a.id) { assist.talkId = undefined; assist.view = { ...assist.view, turns: [] } }
+    push()
+  },
+  'assist:clearHistory': () => {
+    need(assist.view.status !== 'thinking', 'Дождитесь конца ответа.')
+    talks.remove(() => true)
+    talks.flush()
+    assist.talkId = undefined
+    assist.view = { ...assist.view, turns: [] }
+    push()
+  },
+  // Keys go to an OS-encrypted file in main; the UI only ever learns which profiles have one. `psy:key` = the active profile.
+  'psy:key': (a: { key: string | null }) => setKey(activeProfile(store.data.settings).id, a?.key),
+  'api:key': (a: { id: string; key: string | null }) => setKey(profile(a?.id).id, a?.key),
+  'api:add': () => {
+    const list = store.data.settings.apiProfiles
+    need(list.length < API_PROFILES_MAX, `Не больше ${API_PROFILES_MAX} ключей.`)
+    const id = randomUUID()
+    list.push({ id, name: `Ключ ${list.length + 1}`, preset: 'custom', base: '', vision: '', synth: '', assist: '' })
+    store.save(); push()
+    return id
+  },
+  'api:update': (a: { id: string; patch: Record<string, unknown> }) => { editProfile(profile(a?.id).id, a?.patch ?? {}); push() },
+  'api:remove': (a: { id: string }) => {
+    const set = store.data.settings
+    const p = profile(a?.id)
+    need(set.apiProfiles.length > 1, 'Последний ключ удалить нельзя: уберите сам ключ кнопкой «Убрать».')
+    keys.clear(p.id)
+    delete store.data.apiUsage[p.id]
+    delete checks[p.id]
+    set.apiProfiles = set.apiProfiles.filter((x) => x.id !== p.id)
+    if (set.apiActive === p.id) set.apiActive = set.apiProfiles[0].id
+    store.save(); push()
+  },
+  'api:use': (a: { id: string }) => { store.data.settings.apiActive = profile(a?.id).id; store.save(); push() },
+  // Read-only: the model list says whether the key is taken, a balance page (where the provider has one) what is left. No tokens are spent.
+  'api:check': async (a: { id: string }) => {
+    const p = profile(a?.id)
+    const key = keys.get(p.id)
+    need(!!key, 'Сначала сохраните ключ.')
+    checks[p.id] = await checkKey(p, key!)
+    push()
+    return checks[p.id]
+  },
+  'api:resetUsage': (a: { id: string }) => { delete store.data.apiUsage[profile(a?.id).id]; store.save(); push() },
   // The user pressed «Психопортрет»: reads the account's reposts, lets a vision model look at covers and frames, writes a presentation.
   // `username` = analyse any public profile by name (no sign-in needed; `id` only picks which account's browser view sends the requests).
   'psy:start': async (a: { id: string; username?: string; frames?: boolean; limit?: number; gender?: string; age?: string; relation?: string }) => {
@@ -410,15 +658,7 @@ const handlers: Record<string, Handler> = {
     const other = typeof a.username === 'string' && a.username.trim() ? parseHandle(a.username) : undefined
     need(a.username === undefined || a.username === null || !String(a.username).trim() || !!other, 'Не похоже на имя профиля TikTok. Впишите @имя или ссылку на профиль.')
     need(!!other || sessions.get(acc.id) === 'logged_in', 'Сначала войдите в этот аккаунт на вкладке «Обзор».')
-    const key = keybox.get()
-    need(!!key, 'Сначала сохраните ключ API в «Настройках».')
-    const set = store.data.settings
-    const pre = PSY_PRESET_INFO[set.psyPreset]
-    need(set.psyPreset !== 'anthropic' || key!.startsWith('sk-ant-'), 'Это не ключ Anthropic (у них он начинается с sk-ant-). Если ключ от шлюза или перепродавца, выберите в «Настройках» «Свой адрес» и впишите адрес из его инструкции.')
-    const base = (set.psyPreset === 'custom' ? set.psyBase : pre.base).trim()
-    need(/^https:\/\/[^\s]+$/.test(base) || /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(base), 'Укажите адрес API (https://…) в «Настройках».')
-    const vision = set.psyVision || pre.vision
-    const synth = set.psySynth || pre.synth
+    const { provider, prof, vision, synth } = modelApi()
     need(!!vision && !!synth, 'Укажите модели в «Настройках».')
     const devPath = DEV ? process.env.STACKTOK_PSY_PATH : undefined
     const stamp = new Date().toISOString().slice(0, 10)
@@ -433,9 +673,9 @@ const handlers: Record<string, Handler> = {
     void runPortrait({
       wc: browse.contents(acc.id), ses: browse.contents(acc.id).session, base: new URL(HOME_URL).origin,
       username: !other && acc.verified ? acc.username : undefined, target: other, owner: other ? { name: '@' + other, handle: other } : { name: acc.label, handle: acc.username },
-      provider: { kind: pre.kind, base, key: key! }, visionModel: vision, synthModel: synth,
+      provider, visionModel: vision, synthModel: synth,
       devOrigin: DEV ? new URL(HOME_URL).origin : undefined, frames: a.frames === true, limit, subject: { gender: a.gender === 'male' || a.gender === 'female' ? a.gender : undefined, age: typeof a.age === 'string' ? a.age.trim().slice(0, 20) || undefined : undefined, relation: typeof a.relation === 'string' ? a.relation.trim().slice(0, 40) || undefined : undefined }, job: run.job, onChange: push, cancelled: () => run.stop, path
-    }).then((j) => { if (j.status === 'done' && j.path && !devPath) shell.showItemInFolder(j.path) }).finally(() => { target?.release(); push() })
+    }).then((j) => { if (j.status === 'done' && j.path && !devPath) shell.showItemInFolder(j.path) }).finally(() => { spend(prof.id, run.job.inTok ?? 0, run.job.outTok ?? 0, run.job.calls ?? 0); target?.release(); push() })
     push()
     return true
   },
@@ -490,12 +730,13 @@ function createWindow() {
 app.whenReady().then(() => {
   store = new Store(join(app.getPath('userData'), 'stacktok.json'))
   overlay = new ChatOverlay(() => store.data.settings, join(app.getPath('userData'), 'chat-wallpaper.txt'), DEV ? new URL(HOME_URL).origin : undefined)
-  keybox = new KeyBox(join(app.getPath('userData'), 'psy-key.bin'))
+  keys = new KeyRing(join(app.getPath('userData'), 'api-keys.bin'), { file: join(app.getPath('userData'), 'psy-key.bin'), id: activeProfile(store.data.settings).id })
+  talks = new TalkBox(join(app.getPath('userData'), 'assist-history.bin'))
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()
   setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
-app.on('before-quit', () => store?.flush())
+app.on('before-quit', () => { store?.flush(); talks?.flush() })
 app.on('window-all-closed', () => app.quit())

@@ -682,7 +682,7 @@ async function collectLoaded(wc: Electron.WebContents, ctl: ExportCtl, watch: Wa
   return { partner, entries, complete: whole, warnings: [...warnings, ...fast.notes] }
 }
 
-const publicHttps = (u: string, devOrigin?: string) => {
+export const publicHttps = (u: string, devOrigin?: string) => {
   try {
     const x = new URL(u)
     if (devOrigin && x.origin === devOrigin) return true
@@ -731,7 +731,7 @@ export function openMedia(buf: Buffer, hexKey: string): Buffer | undefined {
 
 /** What the page sends along for encrypted files: the hashed account id, and the page's own constant for photos. */
 const MINT_TOKEN = '8a8a1162ec959995aa156772a5ce52b3'
-const secretHeaders = (s?: MediaSecret): Record<string, string> => ({ ...(s?.user ? { 'X-User': s.user } : {}), ...(s?.mint ? { 'mint-token': MINT_TOKEN } : {}) })
+export const secretHeaders = (s?: MediaSecret): Record<string, string> => ({ ...(s?.user ? { 'X-User': s.user } : {}), ...(s?.mint ? { 'mint-token': MINT_TOKEN } : {}) })
 
 /**
  * Saves every picture, sticker, cover and sound once. Small files go inside the page, big ones into a folder next to it,

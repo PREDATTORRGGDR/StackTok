@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bug, Clapperboard, ExternalLink, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
-import { AccountView, ChatExportProgress } from '@shared/types'
+import { ArrowLeft, ArrowRight, Bot, Bug, Clapperboard, ExternalLink, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
+import { AccountView, AssistState, ChatExportProgress } from '@shared/types'
+import { AssistPanel, assistWasOpen } from '../AssistPanel'
 import { call } from '../api'
 import { Dialog } from '../Dialogs'
 import { Page } from '../App'
@@ -8,13 +9,21 @@ import { Page } from '../App'
 export const progressText = (p: ChatExportProgress) =>
   p.phase === 'loading' ? `Загружаю историю: ${p.done} сообщений…` : p.phase === 'reading' ? `Читаю сообщения${p.total ? `: ${p.done} из ${p.total}` : `: ${p.done}`}…` : p.phase === 'media' ? `Сохраняю картинки и стикеры: ${p.done} из ${p.total ?? 0}…` : 'Записываю файл…'
 
-export function Browse({ active, go, openDialog, exporting, reposting, analyzing }: { active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void; exporting: ChatExportProgress | null; reposting: boolean; analyzing: boolean }) {
+export function Browse({ active, go, openDialog, exporting, reposting, analyzing, assist, hasKey }: { active?: AccountView; go: (p: Page) => void; openDialog: (d: Dialog) => void; exporting: ChatExportProgress | null; reposting: boolean; analyzing: boolean; assist: AssistState; hasKey: boolean }) {
   const box = useRef<HTMLDivElement>(null)
   const [confirming, setConfirming] = useState(false)
   const [username, setUsername] = useState('')
   const [avatar, setAvatar] = useState<string>()
   const [covered, setCovered] = useState(false)
   const [muted, setMuted] = useState(true)
+  const [assistOpen, setAssistOpen] = useState(assistWasOpen)
+  const showAssist = (on: boolean) => { setAssistOpen(on); try { localStorage.setItem('assistOpen', on ? '1' : '0') } catch {} }
+
+  useEffect(() => {
+    const h = () => setAssistOpen(true)
+    window.addEventListener('stacktok:assist', h)
+    return () => window.removeEventListener('stacktok:assist', h)
+  }, [])
 
   useEffect(() => {
     const h = (e: Event) => setCovered((e as CustomEvent<boolean>).detail)
@@ -96,6 +105,7 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
         </div>
         <div className="tgroup">
         <button className="btn ghost sm" disabled={!!exporting} title="Сохранить открытый диалог в HTML-файл: все сообщения, время, видео, стикеры и картинки" onClick={exportChat}><FileDown size={16} /><span className="lbl">Экспорт чата</span></button>
+        <button className={'btn ghost sm' + (assistOpen ? ' on' : '')} title="Помощник по переписке: знает открытый диалог, подсказывает, что происходит и как ответить" onClick={() => showAssist(!assistOpen)}><Bot size={16} /><span className="lbl">Помощник</span></button>
         <button className="btn ghost sm" disabled={!signedIn || !!reposting} title={reposting ? 'Удаление репостов уже идёт' : signedIn ? 'Удалить все репосты этого аккаунта' : 'Сначала войдите в аккаунт'} onClick={() => openDialog({ kind: 'reposts', acct: active })}><Repeat2 size={16} /><span className="lbl">Удалить репосты</span></button>
         </div>
         <button className="btn primary sm analyze" disabled={!profile || analyzing} title={analyzing ? 'Анализ уже идёт' : profile ? `Психопортрет профиля @${profile} по его репостам` : 'Откройте профиль человека (страница вида tiktok.com/@имя), и кнопка станет активной'} onClick={analyze}><Sparkles size={16} /><span className="lbl">{profile ? `Запустить анализ @${profile}` : 'Запустить анализ'}</span></button>
@@ -132,7 +142,10 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
         </div>
       )}
       {!signedIn && <div className="glass banner"><span>Войдите в TikTok ниже. Вход сохранится только в профиле этого аккаунта.</span></div>}
-      <div className="glass frame"><div className="viewport" ref={box} /></div>
+      <div className="browse-row">
+        <div className="glass frame"><div className="viewport" ref={box} /></div>
+        {assistOpen && <AssistPanel a={assist} hasKey={hasKey} signedIn={signedIn} busyExport={!!exporting} onClose={() => showAssist(false)} toSettings={() => go('settings')} />}
+      </div>
     </>
   )
 }
