@@ -401,3 +401,32 @@ export function upsertTalk(list: Talk[], t: Talk): Talk[] {
   const turns = t.turns.slice(-TALK_TURNS_MAX).map((x) => ({ ...x, text: x.text.slice(0, TURN_MAX) }))
   return [{ ...t, turns }, ...list.filter((x) => x.id !== t.id)].slice(0, TALKS_MAX)
 }
+
+// A copy of the chat as the model saw it (the system prompt), kept with the history so an old conversation can go on
+// without loading the chat again. One per chat, encrypted by the caller, only for chats the user asked about.
+export interface SavedChat { chat: string; accountId: string; partner: string; handle?: string; system: string; messages: number; first?: string; last?: string; at: number }
+export const SAVED_CHATS_MAX = 40
+
+export function cleanSaved(raw: unknown): SavedChat[] {
+  if (!Array.isArray(raw)) return []
+  const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '')
+  const out: SavedChat[] = []
+  for (const x of raw as Record<string, unknown>[]) {
+    if (!x || typeof x !== 'object' || !str(x.chat, 400) || !str(x.system, MAX_CHARS * 2)) continue
+    out.push({
+      chat: str(x.chat, 400), accountId: str(x.accountId, 64), partner: str(x.partner, 100), handle: str(x.handle, 100) || undefined,
+      system: str(x.system, MAX_CHARS * 2), messages: typeof x.messages === 'number' ? x.messages : 0,
+      first: str(x.first, 20) || undefined, last: str(x.last, 20) || undefined, at: typeof x.at === 'number' ? x.at : 0
+    })
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, SAVED_CHATS_MAX)
+}
+
+/** For a conversation whose chat copy is gone (saved before copies existed): the model has only the conversation itself. */
+export function promptWithoutChat(partner: string): string {
+  return [
+    `Ты — личный помощник по переписке в TikTok. Это продолжение прошлого разговора с пользователем о его переписке с ${partner || 'собеседником'}.`,
+    'Самой переписки сейчас нет: опирайся на то, что уже обсуждалось выше в этом разговоре, и прямо говори, если для ответа нужна свежая переписка (её можно загрузить в панели кнопкой «Загрузить»).',
+    'Отвечай по-русски, коротко и по делу. Готовые сообщения пиши в кавычках «…», в стиле пользователя, как обсуждалось раньше, не грамотнее, чем пишет он сам. Ты только советуешь и сам ничего не отправляешь.'
+  ].join('\n')
+}

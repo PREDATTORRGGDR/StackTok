@@ -224,7 +224,11 @@ export interface AssistState {
   model: string
   talkId?: string // the conversation shown, if it is saved
   talkPartner?: string // whom that conversation is about
-  canAsk: boolean // a chat is loaded and the shown conversation is about it
+  canAsk: boolean // a question can go now: the loaded chat, or an old conversation (with its saved chat copy)
+  talkSource?: 'loaded' | 'saved' | 'none' // what the model sees: the loaded chat, the copy saved with the conversation, or only the conversation
+  savedAt?: number // when that copy was loaded
+  savedMessages?: number
+  savedFirst?: string
   history: AssistTalkInfo[] // saved conversations, newest first
   historySaved: boolean // false: the system cannot encrypt, history lives only until the app closes
 }

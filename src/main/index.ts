@@ -9,8 +9,8 @@ import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl
 import { ChatDump, ExportEntry, Person, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
-import { AssistTurn, Transcript, questionOf, streamReply, systemPrompt, titleOf, transcriptOf } from './chat-assist'
-import { TalkBox, lookAt } from './chat-assist-run'
+import { AssistTurn, Transcript, promptWithoutChat, questionOf, streamReply, systemPrompt, titleOf, transcriptOf } from './chat-assist'
+import { ChatCopies, TalkBox, lookAt } from './chat-assist-run'
 import type { RepostCleaner } from './repost-cleaner'
 import { findReposts } from './reposts'
 import { Sweeper, cleanChoice, linkOf, pick } from './sweep'
@@ -43,23 +43,32 @@ const freshAssist = (): AssistState => ({ status: 'idle', messages: 0, cut: 0, c
 interface AssistRun { view: AssistState; talkId?: string; accountId?: string; chat?: string; entries?: ExportEntry[]; ctx?: { partner: Person; owner: Person; t: Transcript; complete: boolean }; looks: Map<string, string>; abort?: AbortController; cancelLoad: boolean }
 let assist: AssistRun = { view: freshAssist(), looks: new Map(), cancelLoad: false }
 let talks: TalkBox // conversations with the assistant, encrypted on disk
+let copies: ChatCopies // the chats those conversations are about, encrypted on disk
 /** What the UI shows of the assistant: its state plus the list of saved conversations (titles only). */
 function assistView(): AssistState {
   const talk = talks?.get(assist.talkId)
+  const other = !!talk && talk.chat !== assist.chat // an old conversation about a chat that is not the loaded one
+  const copy = other ? copies?.get(talk!.chat) : undefined
   return {
     ...assist.view, talkId: assist.talkId, talkPartner: talk?.partner,
-    canAsk: !!assist.ctx && (!talk || talk.chat === assist.chat),
+    canAsk: other || (!!assist.ctx && !!assist.chat),
+    talkSource: !talk || !other ? (assist.ctx ? 'loaded' : undefined) : copy ? 'saved' : 'none',
+    savedAt: copy?.at, savedMessages: copy?.messages, savedFirst: copy?.first,
     historySaved: talks?.saves ?? true,
     history: (talks?.list ?? []).map((t) => ({ id: t.id, title: t.title, partner: t.partner, handle: t.handle, accountId: t.accountId, updatedAt: t.updatedAt, turns: t.turns.length, here: t.chat === assist.chat }))
   }
 }
-/** Writes the current conversation into the history (a new entry on its first question). */
+/** Writes the current conversation into the history (a new entry on its first question), with a copy of the chat it is about. */
 function saveTalk(run: AssistRun) {
-  if (!run.chat || !run.view.turns.some((t) => t.role === 'user')) return
+  if (!run.view.turns.some((t) => t.role === 'user')) return
   const old = talks.get(run.talkId)
+  if (!old && !run.chat) return
+  if (run.ctx && run.chat && (!old || old.chat === run.chat)) {
+    copies.put({ chat: run.chat, accountId: run.accountId ?? '', partner: run.view.partner ?? '', handle: run.view.handle, system: systemPrompt(run.ctx), messages: run.ctx.t.messages, first: run.ctx.t.first, last: run.ctx.t.last, at: run.view.loadedAt ?? Date.now() })
+  }
   run.talkId ??= randomUUID()
   talks.put({
-    id: run.talkId, chat: old?.chat ?? run.chat, accountId: old?.accountId ?? run.accountId ?? '', partner: old?.partner ?? run.view.partner ?? '', handle: old?.handle ?? run.view.handle,
+    id: run.talkId, chat: old?.chat ?? run.chat!, accountId: old?.accountId ?? run.accountId ?? '', partner: old?.partner ?? run.view.partner ?? '', handle: old?.handle ?? run.view.handle,
     title: old?.title ?? titleOf(run.view.turns.find((t) => t.role === 'user')!.text), createdAt: old?.createdAt ?? Date.now(), updatedAt: Date.now(),
     turns: run.view.turns.filter((t) => t.text).map((t) => ({ role: t.role, text: t.text, ...(t.error ? { error: true } : {}) }))
   })
@@ -145,7 +154,7 @@ function stopReposts() {
 }
 
 function forgetAssist(accountId?: string) {
-  if (accountId) talks.remove((t) => t.accountId === accountId) // the account is gone: so is the advice about its chats
+  if (accountId) { talks.remove((t) => t.accountId === accountId); copies.remove((c) => c.accountId === accountId) } // the account is gone: so is the advice about its chats
   if (accountId && assist.accountId !== accountId) return
   assist.abort?.abort()
   assist.cancelLoad = true
@@ -553,9 +562,10 @@ const handlers: Record<string, Handler> = {
   'assist:ask': (a: { text: string }) => {
     need(isStr(a?.text, 8000), 'Напишите вопрос.')
     need(assist.view.status === 'idle', 'Помощник занят.')
-    need(!!assist.ctx, 'Сначала загрузите переписку.')
     const open = talks.get(assist.talkId)
-    need(!open || open.chat === assist.chat, `Этот разговор о переписке с ${open?.partner || 'другим человеком'}. Откройте тот диалог и загрузите его, или начните новый разговор.`)
+    const other = !!open && open.chat !== assist.chat // going on with an old conversation: its saved chat copy is the context
+    need(other || !!assist.ctx, 'Сначала загрузите переписку.')
+    const system = other ? (copies.get(open!.chat)?.system ?? promptWithoutChat(open!.partner)) : systemPrompt(assist.ctx!)
     const { provider, prof, assist: model } = modelApi()
     need(!!model, 'Укажите модель в «Настройках».')
     const run = assist
@@ -569,7 +579,7 @@ const handlers: Record<string, Handler> = {
     let timer: NodeJS.Timeout | undefined
     const flush = () => { timer = undefined; push() }
     push()
-    void streamReply(provider, model, systemPrompt(run.ctx!), history, (t) => {
+    void streamReply(provider, model, system, history, (t) => {
       answer.text = t
       timer ??= setTimeout(flush, 60) // pieces arrive dozens a second: a few UI updates are enough
     }, abort.signal).then((r) => {
@@ -600,18 +610,22 @@ const handlers: Record<string, Handler> = {
     assist.talkId = t!.id
     assist.view = { ...assist.view, turns: t!.turns.map((x) => ({ ...x })) }
     push()
+    return true
   },
   'assist:delete': (a: { id: string }) => {
     need(typeof a?.id === 'string', 'Bad value.')
     if (assist.talkId === a.id && assist.view.status === 'thinking') throw new Error('Дождитесь конца ответа.')
     talks.remove((t) => t.id === a.id)
+    copies.remove((c) => !talks.list.some((t) => t.chat === c.chat)) // a chat copy lives only as long as a conversation about it
     if (assist.talkId === a.id) { assist.talkId = undefined; assist.view = { ...assist.view, turns: [] } }
     push()
   },
   'assist:clearHistory': () => {
     need(assist.view.status !== 'thinking', 'Дождитесь конца ответа.')
     talks.remove(() => true)
+    copies.remove(() => true)
     talks.flush()
+    copies.flush()
     assist.talkId = undefined
     assist.view = { ...assist.view, turns: [] }
     push()
@@ -732,11 +746,12 @@ app.whenReady().then(() => {
   overlay = new ChatOverlay(() => store.data.settings, join(app.getPath('userData'), 'chat-wallpaper.txt'), DEV ? new URL(HOME_URL).origin : undefined)
   keys = new KeyRing(join(app.getPath('userData'), 'api-keys.bin'), { file: join(app.getPath('userData'), 'psy-key.bin'), id: activeProfile(store.data.settings).id })
   talks = new TalkBox(join(app.getPath('userData'), 'assist-history.bin'))
+  copies = new ChatCopies(join(app.getPath('userData'), 'assist-chats.bin'))
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()
   setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
-app.on('before-quit', () => { store?.flush(); talks?.flush() })
+app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush() })
 app.on('window-all-closed', () => app.quit())

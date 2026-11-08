@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExportEntry, ExportMessage } from '../src/main/chat-export-html'
-import { TALKS_MAX, applyEvent, chatStats, cleanTalks, lineOf, styleOf, upsertTalk, parseLooks, pickMedia, questionOf, span, stampOf, streamReply, systemPrompt, transcriptOf } from '../src/main/chat-assist'
+import { SAVED_CHATS_MAX, TALKS_MAX, applyEvent, chatStats, cleanSaved, cleanTalks, promptWithoutChat, lineOf, styleOf, upsertTalk, parseLooks, pickMedia, questionOf, span, stampOf, streamReply, systemPrompt, transcriptOf } from '../src/main/chat-assist'
 
 const msg = (side: 'me' | 'them', text: string, time: string, extra: Partial<ExportMessage> = {}): ExportMessage =>
   ({ side, text, time, links: [], media: [], reactions: [], rawText: '', outline: '', ...extra })
@@ -188,5 +188,21 @@ describe('assistant history', () => {
     list = upsertTalk(list, { ...talk('t5', 1000), title: 'changed' })
     expect(list[0]).toMatchObject({ id: 't5', title: 'changed' })
     expect(list.filter((t) => t.id === 't5')).toHaveLength(1)
+  })
+})
+
+describe('saved chat copies', () => {
+  const copy = (chat: string, at: number) => ({ chat, accountId: 'acc', partner: 'Аня', system: 'SYS ' + chat, messages: 300, first: '01.11.2026', at })
+  it('reads back only copies with a chat and a prompt, newest first, within the limit', () => {
+    const list = cleanSaved([copy('a', 1), copy('b', 9), { chat: 'c' }, { system: 'x' }, null, ...Array.from({ length: SAVED_CHATS_MAX }, (_, i) => copy('z' + i, 2))])
+    expect(list[0].chat).toBe('b')
+    expect(list).toHaveLength(SAVED_CHATS_MAX)
+    expect(list.some((c) => c.chat === 'c')).toBe(false)
+  })
+  it('a conversation without a copy still gets a prompt that says so', () => {
+    const p = promptWithoutChat('Аня')
+    expect(p).toContain('Аня')
+    expect(p).toContain('Самой переписки сейчас нет')
+    expect(p).toContain('не грамотнее')
   })
 })

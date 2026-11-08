@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from 'node:path'
 import type { ExportEntry, ExportMedia } from './chat-export-html'
 import { openMedia, publicHttps, secretHeaders, sniff } from './chat-export'
-import { LOOK_BATCH, LOOK_SYSTEM, Talk, cleanTalks, parseLooks, pickMedia, upsertTalk } from './chat-assist'
+import { LOOK_BATCH, LOOK_SYSTEM, SAVED_CHATS_MAX, SavedChat, Talk, cleanSaved, cleanTalks, parseLooks, pickMedia, upsertTalk } from './chat-assist'
 import { Img, PsyError, Vlm, pool } from './psycho'
 
 const EDGE = 384 // enough to read a sticker or a cover, about 200 image tokens
@@ -75,22 +75,17 @@ export async function lookAt(entries: ExportEntry[], a: LookArgs): Promise<{ des
   return { described, failed: todo.length - described }
 }
 
-/**
- * The assistant's conversations on disk, encrypted with the system's key (safeStorage), like the API key.
- * If the system cannot encrypt, history lives only while the app is open: it is never written in plain text.
- */
-export class TalkBox {
-  list: Talk[] = []
+/** A list kept in one OS-encrypted file (safeStorage). Without OS encryption it lives only in memory: never written in plain text. */
+class Sealed<T> {
+  list: T[] = []
   readonly saves: boolean
   private timer?: NodeJS.Timeout
-  constructor(private file: string) {
+  constructor(private file: string, clean: (raw: unknown) => T[]) {
     this.saves = safeStorage.isEncryptionAvailable()
-    try { if (this.saves && existsSync(file)) this.list = cleanTalks(JSON.parse(safeStorage.decryptString(readFileSync(file)))) } catch { this.list = [] }
+    try { if (this.saves && existsSync(file)) this.list = clean(JSON.parse(safeStorage.decryptString(readFileSync(file)))) } catch { this.list = [] }
   }
-  get(id?: string) { return id ? this.list.find((t) => t.id === id) : undefined }
-  put(t: Talk) { this.list = upsertTalk(this.list, t); this.later() }
-  remove(pred: (t: Talk) => boolean) { this.list = this.list.filter((t) => !pred(t)); this.later() }
-  private later() {
+  remove(pred: (t: T) => boolean) { const n = this.list.length; this.list = this.list.filter((t) => !pred(t)); if (this.list.length !== n) this.later() }
+  protected later() {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => this.flush(), 400)
   }
@@ -104,5 +99,24 @@ export class TalkBox {
       writeFileSync(this.file + '.tmp', safeStorage.encryptString(JSON.stringify(this.list)))
       renameSync(this.file + '.tmp', this.file)
     } catch {}
+  }
+}
+
+/** The assistant's conversations (questions and answers), `userData/assist-history.bin`. */
+export class TalkBox extends Sealed<Talk> {
+  constructor(file: string) { super(file, cleanTalks) }
+  get(id?: string) { return id ? this.list.find((t) => t.id === id) : undefined }
+  put(t: Talk) { this.list = upsertTalk(this.list, t); this.later() }
+}
+
+/** Copies of the chats the user asked about, `userData/assist-chats.bin`: an old conversation goes on without loading the chat again. */
+export class ChatCopies extends Sealed<SavedChat> {
+  constructor(file: string) { super(file, cleanSaved) }
+  get(chat?: string) { return chat ? this.list.find((c) => c.chat === chat) : undefined }
+  put(c: SavedChat) {
+    const old = this.get(c.chat)
+    if (old && old.at === c.at && old.system === c.system) return
+    this.list = [c, ...this.list.filter((x) => x.chat !== c.chat)].slice(0, SAVED_CHATS_MAX)
+    this.later()
   }
 }

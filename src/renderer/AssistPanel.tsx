@@ -82,6 +82,21 @@ const when = (ms: number) => {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: d.getFullYear() === now.getFullYear() ? undefined : '2-digit' }) + ' ' + hm
 }
 
+/** The latest conversations, one click to open and go on: shown on the start screens so the history tab is rarely needed. */
+function Recent({ a, all }: { a: AssistState; all: () => void }) {
+  if (!a.history.length) return null
+  return (
+    <div className="as-recent">
+      <div className="as-recent-h small muted"><span>Недавние разговоры</span><button className="linkbtn" onClick={all}>все ({a.history.length})</button></div>
+      {a.history.slice(0, 4).map((t) => (
+        <button key={t.id} className="as-recent-i" onClick={() => call('assist:open', { id: t.id })}>
+          <b>{t.title}</b><span className="small muted">{t.partner || t.handle || 'Диалог'} · {when(t.updatedAt)}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Saved conversations with the assistant: open one to read or go on, delete one, or all. */
 function History({ a, onPick }: { a: AssistState; onPick: () => void }) {
   const [sure, setSure] = useState(false)
@@ -91,7 +106,7 @@ function History({ a, onPick }: { a: AssistState; onPick: () => void }) {
       {!a.historySaved && <div className="as-note small">Система не даёт зашифровать историю, поэтому она хранится только до закрытия приложения.</div>}
       {a.history.map((t) => (
         <div key={t.id} className={'as-talk' + (t.id === a.talkId ? ' on' : '')}>
-          <button className="as-talk-main" onClick={async () => { if ((await call('assist:open', { id: t.id })) !== undefined) onPick() }}>
+          <button className="as-talk-main" onClick={async () => { if (await call('assist:open', { id: t.id })) onPick() }}>
             <b>{t.title}</b>
             <span className="small muted">{t.partner || t.handle || 'Диалог'} · {when(t.updatedAt)} · {Math.ceil(t.turns / 2)} вопр.{t.here ? ' · загружена' : ''}</span>
           </button>
@@ -163,7 +178,12 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
   }
   const exportTalk = () => copy(a.turns.map((t) => (t.role === 'user' ? '**Вы:** ' : '**Помощник:** ') + t.text).join('\n\n'))
 
-  const head = loaded
+  const savedNote = a.talkSource === 'saved'
+    ? `копия переписки от ${a.savedAt ? when(a.savedAt) : '?'}${a.savedMessages ? `, ${a.savedMessages} сообщ.` : ''}`
+    : a.talkSource === 'none' ? 'без копии переписки' : ''
+  const head = savedNote
+    ? <>{a.talkPartner || 'Диалог'}<span className="muted"> · {savedNote}</span></>
+    : loaded
     ? <>{a.partner || a.handle || 'Диалог'}<span className="muted"> · {a.messages} сообщ.{a.first ? ` с ${a.first}` : ''}{a.pictures ? ` · ${a.pictures} картинок` : ''}</span></>
     : <span className="muted">Переписка не загружена</span>
   const counts = (
@@ -193,8 +213,8 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       {counts}
       <label className="as-check small"><input type="checkbox" checked={pictures} onChange={(e) => { setPictures(e.target.checked); write('assistPictures', e.target.checked ? '1' : '0') }} /><Image size={14} />Смотреть стикеры, фото и обложки видео</label>
       <button className="btn primary" disabled={!canLoad} title={!signedIn ? 'Сначала войдите в аккаунт' : busyExport ? 'Идёт экспорт чата' : ''} onClick={load}>Загрузить переписку</button>
-      {a.history.length > 0 && <button className="btn sm" onClick={() => setTab('history')}><History_ size={13} />История разговоров ({a.history.length})</button>}
-      <p className="muted small">Переписка хранится только в памяти, пока открыто приложение, и уходит только выбранному в «Настройках» провайдеру нейросети. Вопросы и ответы помощника сохраняются в историю зашифрованными. Больше сообщений — точнее, но дороже.</p>
+      <Recent a={a} all={() => setTab('history')} />
+      <p className="muted small">Переписка уходит только выбранному в «Настройках» провайдеру нейросети. Разговоры с помощником и копия переписки, о которой вы спрашивали, сохраняются в историю зашифрованными, чтобы их можно было продолжить. Больше сообщений — точнее, но дороже.</p>
     </div>
   )
   else body = (
@@ -204,6 +224,7 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
           <div className="as-quick">
             <p className="muted small">Спросите что угодно о переписке или выберите вопрос:</p>
             {QUICK.map((q) => <button key={q} className="chip" disabled={busy || !hasKey} onClick={() => ask(q)}>{q}</button>)}
+            <Recent a={a} all={() => setTab('history')} />
           </div>
         )}
         {a.turns.map((t, i) => (
@@ -219,28 +240,28 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
           </Fragment>
         ))}
       </div>
-      {a.canAsk ? (
-        <div className="as-input">
-          <textarea
-            ref={area} className="input" rows={2} value={text} maxLength={8000} placeholder={hasKey ? 'Спросите о переписке… (Enter — отправить)' : 'Сначала сохраните ключ API в «Настройках»'}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(text) } }}
-          />
-          {a.status === 'thinking'
-            ? <button className="btn round" title="Остановить ответ" onClick={() => call('assist:stop')}><Square size={14} /></button>
-            : <button className="btn primary round" title="Отправить" disabled={!text.trim() || !hasKey} onClick={() => ask(text)}><Send size={15} /></button>}
-        </div>
-      ) : (
+      {a.talkSource === 'saved' && (
         <div className="as-resume small">
-          <span>{loaded
-            ? `Этот разговор о переписке с ${a.talkPartner || 'другим человеком'}. Чтобы продолжить, откройте тот диалог слева и загрузите его.`
-            : `Чтобы продолжить, откройте слева диалог${a.talkPartner ? ` с ${a.talkPartner}` : ''} и загрузите переписку.`}</span>
-          <div className="row">
-            <button className="btn primary sm" disabled={!canLoad} onClick={load}>Загрузить открытый диалог</button>
-            {loaded && <button className="btn sm" onClick={() => call('assist:reset')}><MessageSquarePlus size={13} />Новый разговор</button>}
-          </div>
+          <span>Продолжаете старый разговор: помощник видит сохранённую копию переписки{a.savedAt ? ` от ${when(a.savedAt)}` : ''}. Новых сообщений в ней нет — чтобы их учесть, откройте этот диалог слева и нажмите «Обновить».</span>
+          <div className="row"><button className="btn sm" disabled={!canLoad} onClick={load}><RotateCw size={13} />Обновить из открытого диалога</button></div>
         </div>
       )}
+      {a.talkSource === 'none' && (
+        <div className="as-resume small">
+          <span>Копия переписки для этого разговора не сохранилась (он старше этой функции): помощник помнит только сам разговор. Откройте диалог слева и обновите, чтобы он снова видел переписку.</span>
+          <div className="row"><button className="btn sm" disabled={!canLoad} onClick={load}><RotateCw size={13} />Загрузить открытый диалог</button></div>
+        </div>
+      )}
+      <div className="as-input">
+        <textarea
+          ref={area} className="input" rows={2} value={text} maxLength={8000} placeholder={!hasKey ? 'Сначала сохраните ключ API в «Настройках»' : a.canAsk ? 'Спросите о переписке… (Enter — отправить)' : 'Сначала загрузите переписку'}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(text) } }}
+        />
+        {a.status === 'thinking'
+          ? <button className="btn round" title="Остановить ответ" onClick={() => call('assist:stop')}><Square size={14} /></button>
+          : <button className="btn primary round" title="Отправить" disabled={!text.trim() || !hasKey || !a.canAsk} onClick={() => ask(text)}><Send size={15} /></button>}
+      </div>
       <div className="as-foot small muted">
         {a.model ? a.model : 'модель из «Настроек»'}{a.tokens ? ` · ${a.tokens >= 1000 ? Math.round(a.tokens / 1000) + 'k' : a.tokens} токенов` : ''}{loaded && a.complete ? ' · вся история' : ''}
         {a.status === 'thinking' && <span className="as-live">печатает…</span>}
@@ -254,7 +275,7 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       <div className="as-head">
         <div className="as-title"><Sparkles size={16} /><b>Помощник</b></div>
         <span style={{ flex: 1 }} />
-        {loaded && tab === 'chat' && <button className="btn ghost round sm" title="Обновить переписку (подтянуть новые сообщения)" disabled={!canLoad} onClick={load}><RotateCw size={15} /></button>}
+        {(loaded || a.talkSource === 'saved' || a.talkSource === 'none') && tab === 'chat' && <button className="btn ghost round sm" title="Обновить переписку из открытого диалога (подтянуть новые сообщения)" disabled={!canLoad} onClick={load}><RotateCw size={15} /></button>}
         {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Скопировать разговор с помощником" onClick={exportTalk}><Download size={15} /></button>}
         {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Новый разговор (переписка остаётся загруженной)" disabled={busy} onClick={() => call('assist:reset')}><MessageSquarePlus size={15} /></button>}
         <button className={'btn ghost round sm' + (tab === 'history' ? ' on' : '')} title="История разговоров" onClick={() => setTab(tab === 'history' ? 'chat' : 'history')}><History_ size={15} /></button>
