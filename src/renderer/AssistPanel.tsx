@@ -150,25 +150,30 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
     const x0 = e.clientX, w0 = width
     let w = w0
     const grip = e.currentTarget
-    grip.setPointerCapture(e.pointerId)
+    try { grip.setPointerCapture(e.pointerId) } catch {} // listeners sit on the window anyway: capture only keeps the cursor style
     window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: true }))
     document.body.classList.add('as-dragging')
     const move = (ev: PointerEvent) => { w = clampWidth(w0 + x0 - ev.clientX, row); setWidth(w) }
     const up = () => {
-      grip.removeEventListener('pointermove', move)
-      grip.removeEventListener('pointerup', up)
-      grip.removeEventListener('pointercancel', up)
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
       document.body.classList.remove('as-dragging')
       window.dispatchEvent(new CustomEvent('stacktok:modal', { detail: false }))
       write('assistWidth', String(w))
     }
-    grip.addEventListener('pointermove', move)
-    grip.addEventListener('pointerup', up)
-    grip.addEventListener('pointercancel', up)
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
   const resetWidth = () => { const row = panel.current?.parentElement?.clientWidth ?? window.innerWidth; const w = clampWidth(WIDTH.def, row); setWidth(w); write('assistWidth', String(w)) }
 
   const load = () => call('assist:load', { count, pictures })
+  /** «Обновить»: only what is newer than the last message here; the panel says how many came. */
+  const refresh = async () => {
+    const r = await call<{ added?: number }>('assist:load', { count, pictures, refresh: true })
+    if (r && r.added !== undefined) toast(r.added ? `Новых сообщений: ${r.added}` : 'Новых сообщений нет')
+  }
   const ask = async (q: string) => {
     const t = q.trim()
     if (!t || busy || !a.canAsk) return
@@ -242,8 +247,8 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       </div>
       {a.talkSource === 'saved' && (
         <div className="as-resume small">
-          <span>Продолжаете старый разговор: помощник видит сохранённую копию переписки{a.savedAt ? ` от ${when(a.savedAt)}` : ''}. Новых сообщений в ней нет — чтобы их учесть, откройте этот диалог слева и нажмите «Обновить».</span>
-          <div className="row"><button className="btn sm" disabled={!canLoad} onClick={load}><RotateCw size={13} />Обновить из открытого диалога</button></div>
+          <span>Помощник видит сохранённую копию переписки{a.savedAt ? ` от ${when(a.savedAt)}` : ''}. Чтобы добавить то, что пришло после, откройте этот диалог слева и нажмите кнопку ниже: подтянутся только новые сообщения.</span>
+          <div className="row"><button className="btn sm" disabled={!canLoad} onClick={refresh}><RotateCw size={13} />Подтянуть новые сообщения</button></div>
         </div>
       )}
       {a.talkSource === 'none' && (
@@ -275,7 +280,7 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       <div className="as-head">
         <div className="as-title"><Sparkles size={16} /><b>Помощник</b></div>
         <span style={{ flex: 1 }} />
-        {(loaded || a.talkSource === 'saved' || a.talkSource === 'none') && tab === 'chat' && <button className="btn ghost round sm" title="Обновить переписку из открытого диалога (подтянуть новые сообщения)" disabled={!canLoad} onClick={load}><RotateCw size={15} /></button>}
+        {(loaded || a.talkSource === 'saved' || a.talkSource === 'none') && tab === 'chat' && <button className="btn ghost round sm" title="Подтянуть новые сообщения из открытого диалога (старые не загружаются заново)" disabled={!canLoad} onClick={refresh}><RotateCw size={15} /></button>}
         {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Скопировать разговор с помощником" onClick={exportTalk}><Download size={15} /></button>}
         {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Новый разговор (переписка остаётся загруженной)" disabled={busy} onClick={() => call('assist:reset')}><MessageSquarePlus size={15} /></button>}
         <button className={'btn ghost round sm' + (tab === 'history' ? ' on' : '')} title="История разговоров" onClick={() => setTab(tab === 'history' ? 'chat' : 'history')}><History_ size={15} /></button>

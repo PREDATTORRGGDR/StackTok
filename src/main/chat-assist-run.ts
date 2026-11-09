@@ -115,7 +115,7 @@ export class ChatCopies extends Sealed<SavedChat> {
   get(chat?: string) { return chat ? this.list.find((c) => c.chat === chat) : undefined }
   put(c: SavedChat) {
     const old = this.get(c.chat)
-    if (old && old.at === c.at && old.system === c.system) return
+    if (old && old.at === c.at && old.messages === c.messages && !!old.entries === !!c.entries) return
     this.list = [c, ...this.list.filter((x) => x.chat !== c.chat)].slice(0, SAVED_CHATS_MAX)
     this.later()
   }

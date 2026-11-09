@@ -402,24 +402,90 @@ export function upsertTalk(list: Talk[], t: Talk): Talk[] {
   return [{ ...t, turns }, ...list.filter((x) => x.id !== t.id)].slice(0, TALKS_MAX)
 }
 
-// A copy of the chat as the model saw it (the system prompt), kept with the history so an old conversation can go on
-// without loading the chat again. One per chat, encrypted by the caller, only for chats the user asked about.
-export interface SavedChat { chat: string; accountId: string; partner: string; handle?: string; system: string; messages: number; first?: string; last?: string; at: number }
+// A copy of the chat the user asked about, kept with the history so an old conversation goes on without loading the chat again,
+// and so «Обновить» only asks TikTok for what is newer. One per chat, encrypted by the caller. It holds the messages in a compact
+// form (only what the transcript needs) and the picture descriptions; old copies (before 2026-11-09 evening) hold only `system`.
+export interface SavedChat {
+  chat: string; accountId: string; partner: string; handle?: string; owner?: Person
+  entries?: ExportEntry[]; looks?: [string, string][]; complete?: boolean
+  system?: string // copies from before entries were kept: the prompt itself
+  messages: number; first?: string; last?: string; at: number
+}
 export const SAVED_CHATS_MAX = 40
+const SAVED_ENTRIES_MAX = 5000
 
 export function cleanSaved(raw: unknown): SavedChat[] {
   if (!Array.isArray(raw)) return []
   const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '')
   const out: SavedChat[] = []
   for (const x of raw as Record<string, unknown>[]) {
-    if (!x || typeof x !== 'object' || !str(x.chat, 400) || !str(x.system, MAX_CHARS * 2)) continue
+    if (!x || typeof x !== 'object' || !str(x.chat, 400)) continue
+    const entries = Array.isArray(x.entries) ? (x.entries as ExportEntry[]).filter((e) => e && typeof e === 'object' && ('sep' in e ? typeof e.sep === 'string' : typeof e.text === 'string' && Array.isArray(e.media) && Array.isArray(e.reactions))).slice(-SAVED_ENTRIES_MAX) : undefined
+    const system = str(x.system, MAX_CHARS * 2) || undefined
+    if (!entries?.length && !system) continue
+    const owner = x.owner && typeof x.owner === 'object' ? { name: str((x.owner as Person).name, 100), handle: str((x.owner as Person).handle, 100) || undefined } : undefined
+    const looks = Array.isArray(x.looks) ? (x.looks as unknown[]).filter((l): l is [string, string] => Array.isArray(l) && typeof l[0] === 'string' && typeof l[1] === 'string').slice(0, 500) : undefined
     out.push({
-      chat: str(x.chat, 400), accountId: str(x.accountId, 64), partner: str(x.partner, 100), handle: str(x.handle, 100) || undefined,
-      system: str(x.system, MAX_CHARS * 2), messages: typeof x.messages === 'number' ? x.messages : 0,
-      first: str(x.first, 20) || undefined, last: str(x.last, 20) || undefined, at: typeof x.at === 'number' ? x.at : 0
+      chat: str(x.chat, 400), accountId: str(x.accountId, 64), partner: str(x.partner, 100), handle: str(x.handle, 100) || undefined, owner,
+      entries: entries?.length ? entries : undefined, looks, complete: x.complete === true, system: entries?.length ? undefined : system,
+      messages: typeof x.messages === 'number' ? x.messages : 0, first: str(x.first, 20) || undefined, last: str(x.last, 20) || undefined, at: typeof x.at === 'number' ? x.at : 0
     })
   }
   return out.sort((a, b) => b.at - a.at).slice(0, SAVED_CHATS_MAX)
+}
+
+/** Only what the transcript reads, and only the newest `keep` messages (with their day lines): the copy stays small. */
+export function compactEntries(entries: ExportEntry[], keep: number): ExportEntry[] {
+  let n = 0, from = entries.length
+  while (from > 0 && n < keep) { from--; if (isMsg(entries[from])) n++ }
+  while (from > 0 && !('sep' in entries[from])) from-- // start at the day line of the first kept message
+  const cut = (x?: string, max = 300) => (x ? x.slice(0, max) : undefined)
+  return entries.slice(from).map((e): ExportEntry => {
+    if (!isMsg(e)) return { sep: e.sep }
+    const media = e.media.map((m) => ({ kind: m.kind, src: m.src, label: cut(m.label, 80) }))
+    const video = e.video ? { text: cut(e.video.text, 300) ?? '', cover: e.video.cover ? { kind: e.video.cover.kind, src: e.video.cover.src } : undefined } : undefined
+    return {
+      side: e.side, author: e.author, time: e.time, text: e.text.slice(0, 4000), links: [], media, video, reply: cut(e.reply), reactions: e.reactions.map((r) => ({ emoji: r.emoji, count: r.count, who: r.who })),
+      rawText: '', outline: '', tag: e.tag, service: e.service, deleted: e.deleted, unknown: e.unknown
+    }
+  })
+}
+
+/** Time of the newest message (ms), from its day line and time; undefined when the times are not in the usual form. */
+export function lastStamp(entries: ExportEntry[]): number | undefined {
+  let day = ''
+  let last: number | undefined
+  for (const e of entries) {
+    if (!isMsg(e)) { day = e.sep; continue }
+    last = stampOf(day, e.time) ?? last
+  }
+  return last
+}
+
+/**
+ * Appends what is newer in `fresh` (newly loaded, oldest first) to `old`. Messages from the very second of the old last one are
+ * compared with the old ones from that second, so nothing doubles and nothing from that second is lost. A new day gets its line.
+ */
+export function appendNew(old: ExportEntry[], fresh: ExportEntry[]): { entries: ExportEntry[]; added: number } {
+  const last = lastStamp(old)
+  if (last === undefined) return { entries: old, added: 0 }
+  const key = (m: ExportMessage) => `${m.side}|${m.time}|${m.text}|${m.media.map((x) => x.src).join(',')}|${m.video?.text ?? ''}`
+  const same = new Set<string>()
+  let day = ''
+  for (const e of old) { if (!isMsg(e)) { day = e.sep; continue } if (stampOf(day, e.time) === last) same.add(day + '|' + key(e)) }
+  let oldDay = day
+  const out = [...old]
+  let added = 0
+  day = ''
+  for (const e of fresh) {
+    if (!isMsg(e)) { day = e.sep; continue }
+    const at = stampOf(day, e.time)
+    if (at === undefined || at < last || (at === last && same.has(day + '|' + key(e)))) continue
+    if (day !== oldDay) { out.push({ sep: day }); oldDay = day }
+    out.push(e)
+    added++
+  }
+  return { entries: out, added }
 }
 
 /** For a conversation whose chat copy is gone (saved before copies existed): the model has only the conversation itself. */

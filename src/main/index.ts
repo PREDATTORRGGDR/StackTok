@@ -9,7 +9,7 @@ import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl
 import { ChatDump, ExportEntry, Person, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
-import { AssistTurn, Transcript, promptWithoutChat, questionOf, streamReply, systemPrompt, titleOf, transcriptOf } from './chat-assist'
+import { AssistTurn, SavedChat, Transcript, appendNew, compactEntries, lastStamp, promptWithoutChat, questionOf, streamReply, systemPrompt, titleOf, transcriptOf } from './chat-assist'
 import { ChatCopies, TalkBox, lookAt } from './chat-assist-run'
 import type { RepostCleaner } from './repost-cleaner'
 import { findReposts } from './reposts'
@@ -38,9 +38,9 @@ let sweep: { job: SweepJob; sweeper?: Sweeper; stop: boolean } | null = null // 
 let psy: { job: PsyJob; stop: boolean } | null = null // at most one repost portrait at a time
 let keys: KeyRing // API keys by profile id, OS-encrypted
 const checks: Record<string, ApiCheck> = {} // last key check per profile (memory only)
-// The chat assistant: the loaded conversation stays here (memory only, never on disk); the UI gets only `view`.
+// The chat assistant: the loaded chat stays here; on disk only as an encrypted copy for the history (ChatCopies). The UI gets only `view`.
 const freshAssist = (): AssistState => ({ status: 'idle', messages: 0, cut: 0, complete: false, warnings: [], turns: [], tokens: 0, model: '', pictures: 0, history: [], canAsk: false, historySaved: true })
-interface AssistRun { view: AssistState; talkId?: string; accountId?: string; chat?: string; entries?: ExportEntry[]; ctx?: { partner: Person; owner: Person; t: Transcript; complete: boolean }; looks: Map<string, string>; abort?: AbortController; cancelLoad: boolean }
+interface AssistRun { view: AssistState; fromCopy?: boolean; talkId?: string; accountId?: string; chat?: string; entries?: ExportEntry[]; ctx?: { partner: Person; owner: Person; t: Transcript; complete: boolean }; looks: Map<string, string>; abort?: AbortController; cancelLoad: boolean }
 let assist: AssistRun = { view: freshAssist(), looks: new Map(), cancelLoad: false }
 let talks: TalkBox // conversations with the assistant, encrypted on disk
 let copies: ChatCopies // the chats those conversations are about, encrypted on disk
@@ -52,19 +52,44 @@ function assistView(): AssistState {
   return {
     ...assist.view, talkId: assist.talkId, talkPartner: talk?.partner,
     canAsk: other || (!!assist.ctx && !!assist.chat),
-    talkSource: !talk || !other ? (assist.ctx ? 'loaded' : undefined) : copy ? 'saved' : 'none',
-    savedAt: copy?.at, savedMessages: copy?.messages, savedFirst: copy?.first,
+    talkSource: !talk || !other ? (assist.ctx ? (assist.fromCopy ? 'saved' : 'loaded') : undefined) : copy ? 'saved' : 'none',
+    savedAt: other ? copy?.at : assist.fromCopy ? assist.view.loadedAt : undefined, savedMessages: other ? copy?.messages : assist.fromCopy ? assist.view.messages : undefined, savedFirst: copy?.first,
     historySaved: talks?.saves ?? true,
     history: (talks?.list ?? []).map((t) => ({ id: t.id, title: t.title, partner: t.partner, handle: t.handle, accountId: t.accountId, updatedAt: t.updatedAt, turns: t.turns.length, here: t.chat === assist.chat }))
   }
 }
+/** The loaded chat as the copy kept with the history: the messages the transcript holds, and the picture descriptions. */
+function copyOf(run: AssistRun): SavedChat | undefined {
+  if (!run.chat || !run.ctx || !run.entries) return
+  const entries = compactEntries(run.entries, run.ctx.t.messages)
+  const srcs = new Set(entries.flatMap((e) => ('sep' in e ? [] : [...e.media.map((m) => m.src), e.video?.cover?.src ?? ''])))
+  return {
+    chat: run.chat, accountId: run.accountId ?? '', partner: run.view.partner ?? run.ctx.partner.name, handle: run.view.handle, owner: run.ctx.owner,
+    entries, looks: [...run.looks].filter(([src]) => srcs.has(src)), complete: run.ctx.complete,
+    messages: run.ctx.t.messages, first: run.ctx.t.first, last: run.ctx.t.last, at: run.view.loadedAt ?? Date.now()
+  }
+}
+/** Makes a saved copy the loaded chat again (an old conversation opened from the history): questions and «Обновить» work as after a load. */
+function restoreCopy(c: SavedChat) {
+  const partner: Person = { name: c.partner, handle: c.handle }
+  assist.chat = c.chat
+  assist.accountId = c.accountId
+  assist.entries = c.entries
+  assist.looks = new Map(c.looks ?? [])
+  assist.fromCopy = true
+  assist.ctx = { partner, owner: c.owner ?? { name: '' }, t: transcriptOf([], partner), complete: !!c.complete }
+  assist.view = { ...assist.view, partner: c.partner, handle: c.handle, loadedAt: c.at, pictures: assist.looks.size, warnings: [] }
+  buildContext(assist)
+}
+
 /** Writes the current conversation into the history (a new entry on its first question), with a copy of the chat it is about. */
 function saveTalk(run: AssistRun) {
   if (!run.view.turns.some((t) => t.role === 'user')) return
   const old = talks.get(run.talkId)
   if (!old && !run.chat) return
   if (run.ctx && run.chat && (!old || old.chat === run.chat)) {
-    copies.put({ chat: run.chat, accountId: run.accountId ?? '', partner: run.view.partner ?? '', handle: run.view.handle, system: systemPrompt(run.ctx), messages: run.ctx.t.messages, first: run.ctx.t.first, last: run.ctx.t.last, at: run.view.loadedAt ?? Date.now() })
+    const c = copyOf(run)
+    if (c) copies.put(c)
   }
   run.talkId ??= randomUUID()
   talks.put({
@@ -499,7 +524,8 @@ const handlers: Record<string, Handler> = {
   // The key goes to an OS-encrypted file in main; the UI only ever learns whether one is saved.
   // The user pressed «Загрузить» in the assistant: reads the chat open in the active account's view into memory (nothing is saved),
   // then the cheap model describes its newest pictures once (stickers, photos, video covers), so questions carry only words.
-  'assist:load': async (a?: { count?: number; pictures?: boolean }) => {
+  // `refresh` on the same chat: only messages newer than the last one already here are asked for and appended.
+  'assist:load': async (a?: { count?: number; pictures?: boolean; refresh?: boolean }) => {
     need(assist.view.status === 'idle', 'Помощник занят.')
     need(!chatExport, 'Дождитесь конца экспорта чата.')
     const count = typeof a?.count === 'number' && Number.isInteger(a.count) && a.count >= 0 ? Math.min(a.count, 1_000_000) : 300
@@ -511,31 +537,40 @@ const handlers: Record<string, Handler> = {
     const chat = acc.id + '|' + info.name + '|' + info.handle
     const run = assist
     if (run.chat !== chat) run.looks = new Map()
+    const since = a?.refresh === true && run.chat === chat && run.entries?.length && run.ctx ? lastStamp(run.entries) : undefined
     run.cancelLoad = false
-    run.view = { ...run.view, status: 'loading', loading: 'Загружаю переписку…' }
+    run.view = { ...run.view, status: 'loading', loading: since !== undefined ? 'Подтягиваю новые сообщения…' : 'Загружаю переписку…' }
     push()
     target.hold()
     const warnings: string[] = []
     try {
       const got = await collectChat(target.wc, {
         cancelled: () => run.cancelLoad,
-        progress: (p) => { run.view.loading = p.phase === 'loading' ? `Загружаю историю: ${p.done} сообщений…` : p.phase === 'reading' ? `Читаю сообщения: ${p.done}${p.total ? ' из ' + p.total : ''}…` : 'Готовлю контекст…'; push() }
-      }, count ? { mode: 'last', count } : { mode: 'all' })
+        progress: (p) => { run.view.loading = since !== undefined ? 'Подтягиваю новые сообщения…' : p.phase === 'loading' ? `Загружаю историю: ${p.done} сообщений…` : p.phase === 'reading' ? `Читаю сообщения: ${p.done}${p.total ? ' из ' + p.total : ''}…` : 'Готовлю контекст…'; push() }
+      }, since !== undefined ? { mode: 'time', from: since } : count ? { mode: 'last', count } : { mode: 'all' })
       if (run !== assist) return null // forgotten while loading
       const keep = run.talkId ? talks.get(run.talkId)?.chat === chat : run.chat === chat
       if (!keep) run.talkId = undefined
       run.accountId = acc.id
       run.chat = chat
-      run.entries = got.entries
-      run.ctx = { partner: got.partner, owner: { name: acc.label, handle: acc.username }, t: transcriptOf([], got.partner), complete: got.complete }
-      warnings.push(...got.warnings.filter((w) => !/^Файл собран/.test(w)).map((w) => w.replace(/в файл[ае]?|в файле/g, 'в контексте')))
+      run.fromCopy = false
+      let added: number | undefined
+      if (since !== undefined) { // the old messages stay as they are; the newer ones go after them
+        const m = appendNew(run.entries!, got.entries)
+        run.entries = m.entries
+        added = m.added
+      } else {
+        run.entries = got.entries
+        run.ctx = { partner: got.partner, owner: { name: acc.label, handle: acc.username }, t: transcriptOf([], got.partner), complete: got.complete }
+      }
+      warnings.push(...got.warnings.filter((w) => !/^Файл собран|^Выбранный период/.test(w)).map((w) => w.replace(/в файл[ае]?|в файле/g, 'в контексте')))
       if (a?.pictures !== false && keys.has(activeProfile(store.data.settings).id)) {
         try {
           const { provider, prof, vision: model } = modelApi()
           const vlm = new Vlm(provider)
           run.view.loading = 'Смотрю стикеры, фото и обложки…'
           push()
-          const r = await lookAt(got.entries, {
+          const r = await lookAt(run.entries!, {
             ses: target.ses, vlm, model, looks: run.looks, devOrigin: DEV ? new URL(HOME_URL).origin : undefined, cancelled: () => run.cancelLoad,
             progress: (d, t) => { run.view.loading = `Смотрю стикеры, фото и обложки: ${d} из ${t}…`; push() }
           })
@@ -546,10 +581,11 @@ const handlers: Record<string, Handler> = {
           warnings.push(`Картинки не разобраны: ${(e as Error).message}`)
         }
       }
-      run.view = { ...run.view, status: 'idle', loading: undefined, partner: got.partner.name || info.name, handle: got.partner.handle || info.handle, loadedAt: Date.now(), turns: keep ? run.view.turns : [], pictures: run.looks.size, warnings }
+      run.view = { ...run.view, status: 'idle', loading: undefined, partner: run.ctx!.partner.name || info.name, handle: run.ctx!.partner.handle || info.handle, loadedAt: Date.now(), turns: keep ? run.view.turns : [], pictures: run.looks.size, warnings }
       buildContext(run)
       if (run.view.cut) run.view.warnings.unshift(`Переписка длинная: в контекст вошли последние ${run.view.messages} сообщений, ещё ${run.view.cut} не поместились (так дешевле).`)
-      return { messages: run.view.messages }
+      if (keep && talks.get(run.talkId)) { const c = copyOf(run); if (c) copies.put(c) } // the history's copy gets the new messages too
+      return { messages: run.view.messages, added }
     } catch (e) {
       if (run === assist) run.view = { ...run.view, status: 'idle', loading: undefined }
       throw new Error(run.cancelLoad ? 'Загрузка остановлена.' : 'Не удалось загрузить переписку: ' + (e as Error).message)
@@ -607,6 +643,9 @@ const handlers: Record<string, Handler> = {
     need(assist.view.status !== 'thinking', 'Дождитесь конца ответа.')
     const t = talks.get(a?.id)
     need(!!t, 'Разговор не найден.')
+    need(assist.view.status === 'idle', 'Дождитесь конца загрузки.')
+    const c = copies.get(t!.chat)
+    if (c?.entries && t!.chat !== assist.chat) restoreCopy(c) // its chat comes back: questions and «Обновить» work at once
     assist.talkId = t!.id
     assist.view = { ...assist.view, turns: t!.turns.map((x) => ({ ...x })) }
     push()

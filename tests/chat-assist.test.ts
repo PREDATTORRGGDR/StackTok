@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExportEntry, ExportMessage } from '../src/main/chat-export-html'
-import { SAVED_CHATS_MAX, TALKS_MAX, applyEvent, chatStats, cleanSaved, cleanTalks, promptWithoutChat, lineOf, styleOf, upsertTalk, parseLooks, pickMedia, questionOf, span, stampOf, streamReply, systemPrompt, transcriptOf } from '../src/main/chat-assist'
+import { SAVED_CHATS_MAX, TALKS_MAX, appendNew, applyEvent, compactEntries, lastStamp, chatStats, cleanSaved, cleanTalks, promptWithoutChat, lineOf, styleOf, upsertTalk, parseLooks, pickMedia, questionOf, span, stampOf, streamReply, systemPrompt, transcriptOf } from '../src/main/chat-assist'
 
 const msg = (side: 'me' | 'them', text: string, time: string, extra: Partial<ExportMessage> = {}): ExportMessage =>
   ({ side, text, time, links: [], media: [], reactions: [], rawText: '', outline: '', ...extra })
@@ -204,5 +204,52 @@ describe('saved chat copies', () => {
     expect(p).toContain('Аня')
     expect(p).toContain('Самой переписки сейчас нет')
     expect(p).toContain('не грамотнее')
+  })
+})
+
+describe('«Обновить» adds only the new messages', () => {
+  const old: ExportEntry[] = [
+    { sep: '01.11.2026' }, msg('me', 'a', '10:00:00'),
+    { sep: '02.11.2026' }, msg('them', 'b', '09:00:00'), msg('me', 'c', '09:00:30')
+  ]
+  it('finds the time of the last message', () => {
+    expect(lastStamp(old)).toBe(new Date(2026, 10, 2, 9, 0, 30).getTime())
+    expect(lastStamp([msg('me', 'x', 'вчера')])).toBeUndefined()
+  })
+  it('appends what is newer, keeps a second-level twin once, opens a new day', () => {
+    const fresh: ExportEntry[] = [
+      { sep: '02.11.2026' }, msg('them', 'b', '09:00:00'), msg('me', 'c', '09:00:30'), msg('them', 'same second', '09:00:30'), msg('them', 'd', '09:05:00'),
+      { sep: '03.11.2026' }, msg('me', 'e', '08:00:00')
+    ]
+    const r = appendNew(old, fresh)
+    expect(r.added).toBe(3)
+    expect(r.entries.map((e) => ('sep' in e ? '#' + e.sep : e.text))).toEqual(['#01.11.2026', 'a', '#02.11.2026', 'b', 'c', 'same second', 'd', '#03.11.2026', 'e'])
+    expect(appendNew(r.entries, fresh).added).toBe(0) // pressing it again adds nothing
+  })
+  it('a full reload returned by the slow way still adds only the new ones', () => {
+    const everything: ExportEntry[] = [...old, msg('them', 'new', '10:00:00')]
+    expect(appendNew(old, everything).entries.filter((e) => !('sep' in e)).map((e) => (e as ExportMessage).text)).toEqual(['a', 'b', 'c', 'new'])
+  })
+  it('the saved copy keeps only what the transcript needs, from the day line of its first message', () => {
+    const big: ExportEntry[] = [...old]
+    ;(big[4] as ExportMessage).rawText = 'x'.repeat(5000)
+    ;(big[4] as ExportMessage).media = [{ kind: 'sticker', src: 'https://p16.tiktokcdn.com/s.webp', label: 'кот', data: 'data:image/png;base64,AAAA' }]
+    const c = compactEntries(big, 2)
+    expect(c.map((e) => ('sep' in e ? '#' + e.sep : e.text))).toEqual(['#02.11.2026', 'b', 'c'])
+    const m = c[2] as ExportMessage
+    expect(m.rawText).toBe('')
+    expect(m.media).toEqual([{ kind: 'sticker', src: 'https://p16.tiktokcdn.com/s.webp', label: 'кот' }])
+    expect(transcriptOf(c, { name: 'Аня' }).messages).toBe(2)
+  })
+  it('copies with messages and old copies with only the prompt both read back', () => {
+    const list = cleanSaved([
+      { chat: 'x', accountId: 'a', partner: 'Аня', entries: compactEntries(old, 10), looks: [['https://p16.tiktokcdn.com/s.webp', 'кот'], ['bad']], complete: true, messages: 3, at: 2 },
+      { chat: 'y', accountId: 'a', partner: 'Боря', system: 'SYS', messages: 5, at: 1 },
+      { chat: 'z', entries: [{ nope: 1 }] }
+    ])
+    expect(list.map((c) => c.chat)).toEqual(['x', 'y'])
+    expect(list[0].entries).toHaveLength(5)
+    expect(list[0].looks).toEqual([['https://p16.tiktokcdn.com/s.webp', 'кот']])
+    expect(list[1].system).toBe('SYS')
   })
 })
