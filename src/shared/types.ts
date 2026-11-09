@@ -305,3 +305,54 @@ export interface VideoTotals {
   best: number // views of the most watched video
   complete: boolean
 }
+
+// ── watchdog (profile monitor) ──
+
+/** One target being monitored, as the UI sees it. */
+export interface WatchdogTargetView {
+  id: string
+  handle: string
+  nickname?: string
+  avatar?: string
+  accountId: string
+  active: boolean
+  since: number // watching began
+  checking: boolean // a look is going on right now
+  lastCheck?: number // the last look ended
+  lastOk?: number // the last look TikTok answered
+  nextAt?: number // the next look is planned for
+  error?: string // why the last look failed or why watching is paused
+  note?: string // what the watchdog is unsure about right now
+  ready: boolean // the list was read once, changes are reported from here on
+  reposts: number // reposts in the list now
+  pending: number // reposts that vanished and are being rechecked
+  eventCount: number
+  lastActive?: number // the last event the person caused
+  activityOk?: boolean // the profile's counters are readable
+  via?: string // name of the app account whose session asks TikTok
+}
+
+/** An event in the watchdog feed. */
+export interface WatchdogEventView {
+  id: string
+  targetId: string
+  kind: 'repost_added' | 'repost_removed' | 'activity' | 'online' | 'offline'
+  videoId?: string
+  meta?: { author?: string; desc?: string; cover?: string; createTime?: number }
+  at: number
+  duration?: number
+  isFlash?: boolean
+  late?: boolean
+  why?: 'unavailable'
+  what?: 'following' | 'liked' | 'videos' | 'nickname' | 'bio'
+  delta?: number
+}
+
+/** The watchdog as the UI sees it. */
+export interface WatchdogJob {
+  targets: WatchdogTargetView[]
+  events: WatchdogEventView[]
+  unread: number // events found since the screen was last looked at
+  notify: boolean // Windows notifications about new events
+  status: 'idle' | 'running'
+}

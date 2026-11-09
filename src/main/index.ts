@@ -1,8 +1,8 @@
-import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { BrowserWindow, Notification, app, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, cleanHandle, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, cleanHandle, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES, WatchdogJob } from '../shared/types'
 import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
 import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
 import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
@@ -20,6 +20,7 @@ import { KeyRing, runPortrait } from './psycho-run'
 import { baseOf, checkKey } from './api-check'
 import { Downloader } from './downloader'
 import { Store } from './store'
+import { WatchdogRunner } from './watchdog-run'
 
 const DEV = !app.isPackaged
 
@@ -38,6 +39,7 @@ let sweep: { job: SweepJob; sweeper?: Sweeper; stop: boolean } | null = null // 
 let psy: { job: PsyJob; stop: boolean } | null = null // at most one repost portrait at a time
 let keys: KeyRing // API keys by profile id, OS-encrypted
 const checks: Record<string, ApiCheck> = {} // last key check per profile (memory only)
+let watchdog: WatchdogRunner
 // The chat assistant: the loaded chat stays here; on disk only as an encrypted copy for the history (ChatCopies). The UI gets only `view`.
 const freshAssist = (): AssistState => ({ status: 'idle', messages: 0, cut: 0, complete: false, warnings: [], turns: [], tokens: 0, model: '', pictures: 0, history: [], canAsk: false, historySaved: true })
 interface AssistRun { view: AssistState; fromCopy?: boolean; talkId?: string; accountId?: string; chat?: string; entries?: ExportEntry[]; ctx?: { partner: Person; owner: Person; t: Transcript; complete: boolean }; looks: Map<string, string>; abort?: AbortController; cancelLoad: boolean }
@@ -136,7 +138,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData') }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData'), watchdog: watchdog?.view() ?? null, watchdogOpen: wdOpen }
 }
 
 let pushing = false
@@ -307,6 +309,7 @@ const handlers: Record<string, Handler> = {
     if (sweep?.job.accountId === acc.id) stopSweep()
     if (psy?.job.accountId === acc.id) psy.stop = true
     forgetAssist(acc.id)
+    watchdog.removeAccount(acc.id)
     if (a.wipe === true) await browse.wipe(acc.id)
     else browse.destroy(acc.id)
     store.data.accounts = store.data.accounts.filter((x) => x.id !== acc.id)
@@ -354,6 +357,11 @@ const handlers: Record<string, Handler> = {
     browse.nav(a)
   },
   'browse:external': () => browse.openExternal(),
+  'browse:openUrl': (a: { url: string }) => {
+    need(isStr(a?.url) && /^https:\/\/(www\.)?tiktok\.com\//.test(a.url), 'Bad url.')
+    const id = store.data.activeAccountId ?? store.data.accounts[0]?.id
+    if (id) browse.open(id, a.url)
+  },
   // Which profile is open in the account's view right now (null on any other page): the «Запустить анализ» button works on it.
   'browse:profile': (a: { id: string }) => profileOf(browse.url(account(a?.id).id), DEV ? new URL(HOME_URL).origin : undefined) ?? null,
   'browse:muted': () => browse.isMuted(),
@@ -741,6 +749,59 @@ const handlers: Record<string, Handler> = {
   'psy:stop': () => { if (psy) psy.stop = true; push() },
   'psy:dismiss': () => { if (psy && psy.job.status !== 'running') psy = null; push() },
   'psy:open': () => { if (psy?.job.path) return shell.openPath(psy.job.path) },
+  // ── watchdog (profile monitor) ──
+  'watchdog:add': async (a: { handle: string; accountId: string }) => {
+    need(isStr(a?.handle, 60), 'Укажите @имя.')
+    need(isStr(a?.accountId, 60), 'Выберите аккаунт.')
+    account(a.accountId) // validates account exists
+    const t = await watchdog.addTarget(cleanHandle(a.handle), a.accountId)
+    push()
+    return t.id
+  },
+  'watchdog:remove': (a: { targetId: string }) => {
+    need(isStr(a?.targetId, 60), 'Укажите цель.')
+    watchdog.removeTarget(a.targetId)
+    push()
+  },
+  'watchdog:toggle': (a: { targetId: string }) => {
+    need(isStr(a?.targetId, 60), 'Укажите цель.')
+    watchdog.toggleTarget(a.targetId)
+    push()
+  },
+  'watchdog:check': async (a: { targetId: string }) => {
+    need(isStr(a?.targetId, 60), 'Укажите цель.')
+    await watchdog.checkNow(a.targetId)
+    push()
+  },
+  'watchdog:events': (a: { targetId: string; filter?: string; limit?: number; before?: number }) => {
+    need(isStr(a?.targetId, 60), 'Укажите цель.')
+    return watchdog.getEvents(a.targetId, a.filter, a.limit, a.before)
+  },
+  'watchdog:export': async (a: { targetId: string; format: 'json' | 'csv' }) => {
+    need(isStr(a?.targetId, 60), 'Укажите цель.')
+    need(a?.format === 'json' || a?.format === 'csv', 'Формат: json или csv.')
+    const ext = a.format === 'json' ? 'json' : 'csv'
+    const target = watchdog.state.targets.find((t) => t.id === a.targetId)
+    const name = target ? `watchdog-${target.handle}` : 'watchdog'
+    const { filePath } = await dialog.showSaveDialog(win, { defaultPath: `${name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] })
+    if (!filePath) return null
+    await writeFile(filePath, watchdog.exportData(a.targetId, a.format), 'utf8')
+    shell.showItemInFolder(filePath)
+    return filePath
+  },
+  'watchdog:cleanup': async (a: { days: number }) => {
+    const d = typeof a?.days === 'number' && a.days > 0 ? a.days : 30
+    await watchdog.cleanup(d)
+    push()
+  },
+  'watchdog:clear': (a: { targetId?: string }) => {
+    need(a?.targetId === undefined || isStr(a.targetId, 60), 'Укажите цель.')
+    watchdog.clearEvents(a?.targetId)
+  },
+  'watchdog:seen': () => watchdog.markSeen(),
+  'watchdog:notify': (a: { on: boolean }) => watchdog.setNotify(a?.on === true),
+  'watchdog:storage': async () => watchdog.storageSize(),
+  'watchdog:dismiss': () => push(),
   'win:min': () => win.minimize(),
   'win:max': () => { if (win.isMaximized()) win.unmaximize(); else win.maximize() },
   'win:close': () => win.close(),
@@ -754,6 +815,19 @@ function registerIpc() {
       try { return { ok: true, value: await fn(arg) } } catch (err) { return { ok: false, error: (err as Error).message } }
     })
   }
+}
+
+let wdOpen = 0 // grows when a notification is clicked: the UI opens the watchdog screen
+// The watchdog found something while the window is not in front: a Windows notification, if the user left them on.
+function watchdogNotice(t: { handle: string }, events: { kind: string; why?: string; isFlash?: boolean; late?: boolean }[]) {
+  if (!watchdog.state.notify || !win || win.isDestroyed() || (win.isFocused() && !win.isMinimized()) || !Notification.isSupported()) return
+  const n = (f: (e: (typeof events)[number]) => boolean) => events.filter(f).length
+  const added = n((e) => e.kind === 'repost_added'), removed = n((e) => e.kind === 'repost_removed' && e.why !== 'unavailable'), gone = n((e) => e.why === 'unavailable'), act = n((e) => e.kind === 'activity')
+  const parts = [added && `новых репостов: ${added}`, removed && `удалено репостов: ${removed}`, gone && `видео стало недоступно: ${gone}`, act && `активность в профиле: ${act}`].filter(Boolean)
+  if (!parts.length) return
+  const note = new Notification({ title: `Сторож · @${t.handle}`, body: parts.join(', '), silent: true })
+  note.on('click', () => { if (win.isMinimized()) win.restore(); win.show(); win.focus(); wdOpen++; push() })
+  note.show()
 }
 
 // ---------- window ----------
@@ -792,11 +866,17 @@ app.whenReady().then(() => {
   keys = new KeyRing(join(app.getPath('userData'), 'api-keys.bin'), { file: join(app.getPath('userData'), 'psy-key.bin'), id: activeProfile(store.data.settings).id })
   talks = new TalkBox(join(app.getPath('userData'), 'assist-history.bin'))
   copies = new ChatCopies(join(app.getPath('userData'), 'assist-chats.bin'))
+  watchdog = new WatchdogRunner(push, {
+    loggedIn: () => store.data.accounts.filter((a) => sessions.get(a.id) === 'logged_in').map((a) => a.id),
+    label: (id) => store.data.accounts.find((a) => a.id === id)?.label ?? 'аккаунт',
+    page: (id) => browse?.chatTarget(id)?.wc ?? null
+  }, watchdogNotice)
+  watchdog.startAll()
   registerIpc()
   store.data.accounts.forEach((a) => watchSession(a.id))
   createWindow()
   setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
-app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush() })
+app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush(); watchdog?.destroy() })
 app.on('window-all-closed', () => app.quit())

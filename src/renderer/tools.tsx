@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { BarChart3, Bot, Clapperboard, Download, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
+import { BarChart3, Bot, Clapperboard, Download, Eye, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call, toast } from './api'
 import type { Dialog } from './Dialogs'
@@ -40,6 +40,12 @@ export const TOOLS: Tool[] = [
     blocked: (c) => (!c.acct ? 'Нужен хотя бы один аккаунт в приложении (входить в него не обязательно)' : c.s.hasPsyKey ? null : 'Нужен ключ API в «Настройках»'),
     busy: (c) => c.s.psy?.status === 'running',
     run: (c) => c.openDialog({ kind: 'psy', acct: c.acct! })
+  },
+  {
+    id: 'watchdog', group: 'Анализ', title: 'Сторож', icon: <Eye size={20} />,
+    desc: 'Следит за открытым профилем в фоне и сообщает, когда человек добавил или удалил репост, поставил лайк, подписался или выложил видео. Лента событий, уведомления, сохранение в файл.',
+    blocked: (c) => (!c.acct ? 'Выберите аккаунт' : null),
+    run: () => { window.dispatchEvent(new CustomEvent('stacktok:watchdog')) }
   },
   {
     id: 'reposts', group: 'Чистка аккаунта', title: 'Удалить все репосты', icon: <Repeat2 size={20} />,

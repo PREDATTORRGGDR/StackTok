@@ -6,6 +6,7 @@ import { Dialog, Dialogs } from './Dialogs'
 import type { AccountView } from '@shared/types'
 import { RepostScreen } from './RepostScreen'
 import { SweepCard, SweepScreen } from './SweepScreen'
+import { WatchdogChip, WatchdogScreen } from './WatchdogScreen'
 import { StatsDialog } from './StatsDialog'
 import { Accounts } from './pages/Accounts'
 import { ToolsPage } from './pages/Tools'
@@ -179,6 +180,14 @@ export function App() {
   const [repMin, setRepMin] = useState(false) // repost cleanup folded into the corner card
   const [sweepFor, setSweepFor] = useState<AccountView | null>(null) // the cleanup screen is open for this account
   const [sweepMin, setSweepMin] = useState(false) // cleanup folded into the corner card
+  const [showWd, setShowWd] = useState(false) // watchdog full screen
+  useEffect(() => {
+    const h = () => setShowWd(true)
+    window.addEventListener('stacktok:watchdog', h)
+    return () => window.removeEventListener('stacktok:watchdog', h)
+  }, [])
+  const wdOpen = s?.watchdogOpen ?? 0
+  useEffect(() => { if (wdOpen) setShowWd(true) }, [wdOpen]) // a watchdog notification was clicked
   // Everything that used to ask first now opens the search: it only reads, and the choice comes after it.
   const open = (d: Dialog) => { if (d.kind === 'reposts') { setRepMin(false); call('reposts:start', { id: d.acct.id }) } else if (d.kind === 'sweep') { setSweepMin(false); setSweepFor(d.acct) } else setDialog(d) }
   const hasPsy = !!s?.psy
@@ -246,6 +255,7 @@ export function App() {
             {s.chatExport && page !== 'browse' && (
               <div className="chip-acct"><span>{progressText(s.chatExport)}</span><button className="btn sm" onClick={() => call('chat:exportCancel')}>Отмена</button></div>
             )}
+            <WatchdogChip wd={s.watchdog} onOpen={() => setShowWd(true)} />
             {active && (
               <div className="chip-acct"><Avatar a={active} size={26} /><span>{active.label}</span><span className={'dot ' + (active.session === 'logged_in' ? 'ok' : 'warn')} /></div>
             )}
@@ -262,6 +272,7 @@ export function App() {
       </div>
       {(sweepFor || s.sweep) && (sweepMin && s.sweep ? <SweepCard s={s} onOpen={() => setSweepMin(false)} /> : <SweepScreen s={s} acct={sweepFor ?? undefined} onClose={() => setSweepFor(null)} onMin={() => setSweepMin(true)} />)}
       {s.job && (repMin ? <JobCard s={s} onOpen={() => setRepMin(false)} /> : <RepostScreen s={s} onMin={() => setRepMin(true)} />)}
+      {showWd && <WatchdogScreen s={s} onClose={() => setShowWd(false)} go={setPage} />}
       {s.psy && <PsyCard s={s} full={psyFull} onMin={() => setPsyFull(false)} />}
       {dialog?.kind === 'stats' && <StatsDialog acct={dialog.acct} close={() => setDialog(null)} />}
       {dialog && dialog.kind !== 'stats' && <Dialogs dialog={dialog} close={() => setDialog(null)} onAdded={() => setPage('browse')} onPsyStarted={() => setPsyFull(true)} />}

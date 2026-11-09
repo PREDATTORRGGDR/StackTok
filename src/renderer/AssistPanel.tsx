@@ -1,5 +1,5 @@
 import { Fragment, PointerEvent as RPointerEvent, ReactNode, useEffect, useRef, useState } from 'react'
-import { Copy, Download, Eraser, History as History_, Image, MessageSquarePlus, RotateCw, Send, Sparkles, Square, Trash2, X } from 'lucide-react'
+import { Copy, Eraser, History as History_, Image, MessageSquarePlus, MessagesSquare, RotateCw, Send, Sparkles, Square, Trash2, X } from 'lucide-react'
 import { ASSIST_COUNTS, AssistState } from '@shared/types'
 import { call, toast } from './api'
 
@@ -126,6 +126,8 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
   const [pictures, setPictures] = useState(() => read('assistPictures', '1') === '1')
   const [text, setText] = useState('')
   const [showWarn, setShowWarn] = useState(false)
+  const [sureForget, setSureForget] = useState(false)
+  useEffect(() => { if (!sureForget) return; const t = setTimeout(() => setSureForget(false), 4000); return () => clearTimeout(t) }, [sureForget])
   const [tab, setTab] = useState<'chat' | 'history'>('chat')
   const [width, setWidth] = useState(() => Number(read('assistWidth', String(WIDTH.def))) || WIDTH.def)
   const panel = useRef<HTMLElement>(null)
@@ -181,6 +183,9 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
     if ((await call('assist:ask', { text: t })) === undefined) setText(t)
     area.current?.focus()
   }
+  const who = a.talkPartner || a.partner || a.handle || 'собеседником'
+  const newTalk = async () => { await call('assist:reset'); setTab('chat'); toast(a.canAsk ? 'Новый разговор: переписка осталась, прошлый разговор лежит в «Истории»' : 'Новый разговор') ; area.current?.focus() }
+  const forget = () => { if (!sureForget) return setSureForget(true); setSureForget(false); call('assist:forget'); toast('Переписка забыта. Разговоры остались в «Истории»') }
   const exportTalk = () => copy(a.turns.map((t) => (t.role === 'user' ? '**Вы:** ' : '**Помощник:** ') + t.text).join('\n\n'))
 
   const savedNote = a.talkSource === 'saved'
@@ -227,7 +232,8 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       <div className="as-list" ref={list}>
         {a.turns.length === 0 && (
           <div className="as-quick">
-            <p className="muted small">Спросите что угодно о переписке или выберите вопрос:</p>
+            <div className="as-new"><MessageSquarePlus size={15} /><span>Новый разговор о переписке с <b>{who}</b></span></div>
+            <p className="muted small">Напишите свой вопрос внизу или выберите готовый:</p>
             {QUICK.map((q) => <button key={q} className="chip" disabled={busy || !hasKey} onClick={() => ask(q)}>{q}</button>)}
             <Recent a={a} all={() => setTab('history')} />
           </div>
@@ -259,7 +265,7 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       )}
       <div className="as-input">
         <textarea
-          ref={area} className="input" rows={2} value={text} maxLength={8000} placeholder={!hasKey ? 'Сначала сохраните ключ API в «Настройках»' : a.canAsk ? 'Спросите о переписке… (Enter — отправить)' : 'Сначала загрузите переписку'}
+          ref={area} className="input" rows={2} value={text} maxLength={8000} placeholder={!hasKey ? 'Сначала сохраните ключ API в «Настройках»' : a.canAsk ? 'Спросите о переписке…' : 'Сначала загрузите переписку'}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(text) } }}
         />
@@ -269,7 +275,7 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       </div>
       <div className="as-foot small muted">
         {a.model ? a.model : 'модель из «Настроек»'}{a.tokens ? ` · ${a.tokens >= 1000 ? Math.round(a.tokens / 1000) + 'k' : a.tokens} токенов` : ''}{loaded && a.complete ? ' · вся история' : ''}
-        {a.status === 'thinking' && <span className="as-live">печатает…</span>}
+        {a.status === 'thinking' ? <span className="as-live">печатает…</span> : <span className="as-live faint">Enter — отправить, Shift+Enter — строка</span>}
       </div>
     </>
   )
@@ -280,14 +286,21 @@ export function AssistPanel({ a, hasKey, signedIn, busyExport, onClose, toSettin
       <div className="as-head">
         <div className="as-title"><Sparkles size={16} /><b>Помощник</b></div>
         <span style={{ flex: 1 }} />
-        {(loaded || a.talkSource === 'saved' || a.talkSource === 'none') && tab === 'chat' && <button className="btn ghost round sm" title="Подтянуть новые сообщения из открытого диалога (старые не загружаются заново)" disabled={!canLoad} onClick={refresh}><RotateCw size={15} /></button>}
-        {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Скопировать разговор с помощником" onClick={exportTalk}><Download size={15} /></button>}
-        {a.turns.length > 0 && tab === 'chat' && <button className="btn ghost round sm" title="Новый разговор (переписка остаётся загруженной)" disabled={busy} onClick={() => call('assist:reset')}><MessageSquarePlus size={15} /></button>}
-        <button className={'btn ghost round sm' + (tab === 'history' ? ' on' : '')} title="История разговоров" onClick={() => setTab(tab === 'history' ? 'chat' : 'history')}><History_ size={15} /></button>
-        {loaded && <button className="btn ghost round sm" title="Забыть загруженную переписку (история остаётся)" disabled={busy} onClick={() => call('assist:forget')}><Eraser size={15} /></button>}
-        <button className="btn ghost round sm" title="Скрыть помощника" onClick={onClose}><X size={16} /></button>
+        <div className="seg sm as-tabs">
+          <button className={tab === 'chat' ? 'on' : ''} onClick={() => setTab('chat')}><MessagesSquare size={13} />Чат</button>
+          <button className={tab === 'history' ? 'on' : ''} title="Прошлые разговоры с помощником: открыть и продолжить" onClick={() => setTab('history')}><History_ size={13} />История{a.history.length ? ` ${a.history.length}` : ''}</button>
+        </div>
+        <button className="btn ghost round sm" title="Скрыть помощника (разговор не пропадёт)" onClick={onClose}><X size={16} /></button>
       </div>
-      <div className="as-ctx small">{tab === 'history' ? <span className="muted">История разговоров · {a.history.length}</span> : head}</div>
+      <div className="as-ctx small">{tab === 'history' ? <span className="muted">Нажмите на разговор, чтобы открыть и продолжить его</span> : head}</div>
+      {tab === 'chat' && a.status !== 'loading' && (loaded || a.turns.length > 0) && (
+        <div className="as-acts">
+          {(loaded || a.talkSource === 'saved' || a.talkSource === 'none') && <button className="as-act" title="Дочитать из открытого слева диалога только новые сообщения. Старые не загружаются заново, разговор остаётся" disabled={!canLoad} onClick={refresh}><RotateCw size={13} />Новые сообщения</button>}
+          {a.turns.length > 0 && <button className="as-act" title="Начать с чистого листа о той же переписке. Этот разговор сохранится в «Истории»" disabled={busy} onClick={newTalk}><MessageSquarePlus size={13} />Новый разговор</button>}
+          {a.turns.length > 0 && <button className="as-act" title="Скопировать все вопросы и ответы этого разговора" onClick={exportTalk}><Copy size={13} />Скопировать</button>}
+          {loaded && <button className={'as-act' + (sureForget ? ' danger' : '')} title="Убрать загруженную переписку из помощника, чтобы загрузить другую. Разговоры в «Истории» останутся" disabled={busy} onClick={forget}><Eraser size={13} />{sureForget ? 'Точно забыть?' : 'Забыть переписку'}</button>}
+        </div>
+      )}
       {tab === 'chat' && a.warnings.length > 0 && (
         <button className="as-warn small" onClick={() => setShowWarn(!showWarn)}>
           {showWarn ? a.warnings.map((w, i) => <div key={i}>{w}</div>) : `Замечания: ${a.warnings.length} (нажмите, чтобы прочитать)`}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AccountView, ApiCheck, ApiUsage, AssistState, ChatExportProgress, Job, PsyJob, Settings, SweepJob } from '@shared/types'
+import { AccountView, ApiCheck, ApiUsage, AssistState, ChatExportProgress, Job, PsyJob, Settings, SweepJob, WatchdogJob } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
@@ -10,6 +10,8 @@ export interface AppState {
   sweep: SweepJob | null // cleanup of likes, favorites or following
   psy: PsyJob | null // repost portrait
   assist: AssistState // chat assistant (the chat itself stays in main)
+  watchdog: WatchdogJob | null
+  watchdogOpen: number // grows when a watchdog notification is clicked
   hasPsyKey: boolean // the active API profile has a key (keys themselves never reach the UI)
   apiKeys: string[] // ids of the profiles that have a key
   apiUsage: Record<string, ApiUsage> // tokens spent through the app, by profile

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Bug, Clapperboard, ExternalLink, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Bug, Clapperboard, ExternalLink, Eye, FileDown, Home, MessageCircle, Plus, Repeat2, RotateCw, ShieldCheck, Sparkles, UserRound, Users, Volume2, VolumeX } from 'lucide-react'
 import { AccountView, AssistState, ChatExportProgress } from '@shared/types'
 import { AssistPanel, assistWasOpen } from '../AssistPanel'
-import { call } from '../api'
+import { call, toast } from '../api'
 import { Dialog } from '../Dialogs'
 import { Page } from '../App'
 
@@ -87,6 +87,11 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
   const exportChat = () => openDialog({ kind: 'chatexport', acct: active! })
   const nav = (a: string) => call('browse:nav', a)
   const analyze = () => openDialog({ kind: 'psy', acct: active!, who: profile ?? '', overlay: true })
+  const watchProfile = async () => {
+    if (!profile || !active) return
+    if (await call('watchdog:add', { handle: profile, accountId: active.id })) toast('Сторож следит за @' + profile)
+    window.dispatchEvent(new CustomEvent('stacktok:watchdog'))
+  }
   const signedIn = active.session === 'logged_in'
 
   return (
@@ -109,6 +114,7 @@ export function Browse({ active, go, openDialog, exporting, reposting, analyzing
         <button className="btn ghost sm" disabled={!signedIn || !!reposting} title={reposting ? 'Удаление репостов уже идёт' : signedIn ? 'Удалить все репосты этого аккаунта' : 'Сначала войдите в аккаунт'} onClick={() => openDialog({ kind: 'reposts', acct: active })}><Repeat2 size={16} /><span className="lbl">Удалить репосты</span></button>
         </div>
         <button className="btn primary sm analyze" disabled={!profile || analyzing} title={analyzing ? 'Анализ уже идёт' : profile ? `Психопортрет профиля @${profile} по его репостам` : 'Откройте профиль человека (страница вида tiktok.com/@имя), и кнопка станет активной'} onClick={analyze}><Sparkles size={16} /><span className="lbl">{profile ? `Запустить анализ @${profile}` : 'Запустить анализ'}</span></button>
+        <button className="btn ghost sm" disabled={!profile} title={profile ? `Сторож: сообщать о новых и удалённых репостах и об активности @${profile}` : 'Откройте профиль (tiktok.com/@имя)'} onClick={watchProfile}><Eye size={16} /><span className="lbl">{profile ? `Следить @${profile}` : 'Сторож'}</span></button>
         <span style={{ flex: 1 }} />
         <div className="tgroup">
         <button className="btn ghost round" aria-label={muted ? 'Включить звук' : 'Выключить звук'} title={muted ? 'Звук выключен — нажмите, чтобы включить' : 'Выключить звук'} onClick={async () => setMuted((await call<boolean>('browse:toggleMute')) ?? muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
