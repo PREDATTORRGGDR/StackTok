@@ -29,7 +29,7 @@ function whoIs(id: string) {
 async function me(id: string, expected?: string) {
   const w = await whoIs(id)
   if (!w) throw new Error('TikTok не ответил. Проверьте вход в этот аккаунт и попробуйте позже.')
-  if (expected && w.username.toLowerCase() !== expected.toLowerCase()) throw new Error(`В этой сессии вошли как @${w.username}, а не @${expected}.`)
+  if (expected && w.username.toLowerCase() !== expected.toLowerCase()) throw new Error(`В этой сессии вошли как @${w.username}, а не @${expected}. Если имя указано неверно: «Аккаунты» → меню аккаунта (…) → «Подтвердить заново».`)
   return w
 }
 

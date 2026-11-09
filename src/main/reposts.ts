@@ -114,7 +114,7 @@ export async function findReposts(
     if (!wc.getURL().startsWith(base)) await wc.loadURL(base + '/').catch(() => {})
     const me = await js<{ uniqueId: string; secUid: string } | null>(wc, whoAmI)
     if (!me) return fail('Не удалось определить аккаунт TikTok. Откройте «Обзор», убедитесь, что вход выполнен, и попробуйте снова.')
-    if (username && me.uniqueId.toLowerCase() !== username.toLowerCase()) return fail(`В этой сессии вошли как @${me.uniqueId}, а не @${username}. Ничего не удалено.`)
+    if (username && me.uniqueId.toLowerCase() !== username.toLowerCase()) return fail(`В этой сессии вошли как @${me.uniqueId}, а не @${username}. Ничего не удалено. Если имя указано неверно: «Аккаунты» → меню аккаунта (…) → «Подтвердить заново».`)
     const api: RepostApi = {
       list: (cursor) => js<ListReply>(wc, listReposts, { secUid: me.secUid, cursor, count: PAGE }),
       remove: (id) => js<DeleteReply>(wc, unrepost, id)

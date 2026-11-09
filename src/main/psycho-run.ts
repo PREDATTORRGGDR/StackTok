@@ -214,7 +214,7 @@ export async function runPortrait(a: RunArgs): Promise<PsyJob> {
       const d = await js<{ http: number; code: number; uniqueId: string; secUid: string; priv: boolean; via: string; tried: string }>(a.wc, userDetail, a.target)
       if (d.http === 403 || d.http === 429 || [10202, 10214].includes(d.code)) return fail('TikTok просит проверку или притормозить. Откройте TikTok на вкладке «Обзор», пройдите проверку и повторите позже.')
       if (!d.secUid && !d.priv) return fail(`Профиль @${a.target} не найден (или TikTok не отдал его без входа). Что ответил TikTok: ${d.tried || 'ничего'}. Если имя верное, откройте этот профиль в «Обзоре» (или войдите в аккаунт) и повторите.`)
-      if (d.priv) return fail(`Профиль @${d.uniqueId || a.target} закрытый: его репосты не видны. Ничего не отправлено.`)
+      if (d.priv) return fail(`Профиль @${d.uniqueId || a.target} закрытый: его репосты не видны. Ничего не отправлено. Если имя указано неверно: «Аккаунты» → меню аккаунта (…) → «Подтвердить заново».`)
       me = { uniqueId: d.uniqueId || a.target, secUid: d.secUid }
     } else {
       me = await js<{ uniqueId: string; secUid: string } | null>(a.wc, whoAmI)

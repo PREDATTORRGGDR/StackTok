@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ACCENTS, API_PROFILES_MAX, ApiProfile, ApiUsage, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, PSY_PRESETS, CHAT_WALLPAPERS, Data, Settings, THEMES, newProfile } from '../shared/types'
+import { ACCENTS, API_PROFILES_MAX, cleanHandle, ApiProfile, ApiUsage, BACKGROUNDS, GLASS_MATERIALS, HEX, CHAT_TEXT_SIZES, OPEN_IN, PSY_PRESETS, CHAT_WALLPAPERS, Data, Settings, THEMES, newProfile } from '../shared/types'
 
 export const DEFAULT_SETTINGS: Settings = { theme: 'dark', accent: 'blue', accentColor: '', background: 'graphite', bgCustom: ['#2f5bff', '#8a3dff', '#00c2c7'], glassMaterial: 'acrylic', motion: true, glass: 55, panelOpacity: 50, barOpacity: 50, popOpacity: 96, restoreLast: true, muteByDefault: true, chatOverlay: true, chatWallpaper: 'none', chatDim: 50, chatPrivacy: false, chatTextSize: 'normal', apiProfiles: [newProfile('main')], apiActive: 'main' }
 
@@ -44,7 +44,7 @@ export function sanitize(raw: any): Data {
     .map((a: any) => ({
       id: str(a.id),
       label: str(a.label, 'Аккаунт'),
-      username: str(a.username) || undefined,
+      username: cleanHandle(a.username) || undefined, // «@ name» saved before 2026-11-09 broke the account check
       avatar: str(a.avatar) || undefined,
       verified: a.verified === true,
       openIn: pick(a.openIn, OPEN_IN, 'studio'),

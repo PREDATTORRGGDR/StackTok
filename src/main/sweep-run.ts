@@ -172,7 +172,7 @@ export async function findSweep(
     }
     const me = await js<{ uniqueId: string; secUid: string } | null>(wc, whoAmI)
     if (!me) return fail('Не удалось определить аккаунт TikTok. Откройте «Обзор», убедитесь, что вход выполнен, и попробуйте снова.')
-    if (username && me.uniqueId.toLowerCase() !== username.toLowerCase()) return fail(`В этой сессии вошли как @${me.uniqueId}, а не @${username}. Ничего не изменено.`)
+    if (username && me.uniqueId.toLowerCase() !== username.toLowerCase()) return fail(`В этой сессии вошли как @${me.uniqueId}, а не @${username}. Ничего не изменено. Если имя указано неверно: «Аккаунты» → меню аккаунта (…) → «Подтвердить заново».`)
     const kind: SweepKind = job.kind
     const api: SweepApi = {
       list: (cursor) => js<SweepPage>(wc, site, { op: 'list', kind, secUid: me.secUid, cursor, count: PAGE }),

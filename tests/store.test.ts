@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sanitize } from '../src/main/store'
+import { cleanHandle } from '../src/shared/types'
 
 describe('store validation', () => {
   it('starts with safe defaults on empty or garbage input', () => {
@@ -41,5 +42,20 @@ describe('store validation', () => {
   it('forgets an active account that no longer exists', () => {
     expect(sanitize({ accounts: [{ id: 'a', label: 'A' }], activeAccountId: 'gone' }).activeAccountId).toBeUndefined()
     expect(sanitize({ accounts: [{ id: 'a', label: 'A' }], activeAccountId: 'a' }).activeAccountId).toBe('a')
+  })
+})
+
+describe('confirmed @name', () => {
+  it('drops the @ and any spaces, as TikTok names have none', () => {
+    expect(cleanHandle('@ soundcloud_lyricss')).toBe('soundcloud_lyricss')
+    expect(cleanHandle('  @@name ')).toBe('name')
+    expect(cleanHandle('na me')).toBe('name')
+    expect(cleanHandle('@')).toBe('')
+    expect(cleanHandle(42)).toBe('')
+  })
+  it('a name saved with a space is fixed on load', () => {
+    const d = sanitize({ accounts: [{ id: 'a', label: 'A', username: ' soundcloud_lyricss', verified: true }, { id: 'b', label: 'B', username: '@ ' }] })
+    expect(d.accounts.map((a) => a.username)).toEqual(['soundcloud_lyricss', undefined])
+    expect(d.accounts[0].verified).toBe(true)
   })
 })

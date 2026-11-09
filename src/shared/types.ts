@@ -88,6 +88,9 @@ export interface ApiUsage { inTok: number; outTok: number; requests: number; sin
 /** What a check of a key found: does the provider take it, and what is left on it (if the provider tells). */
 export interface ApiCheck { key: 'ok' | 'bad' | 'unknown'; models?: number; balance?: string; note?: string; at: number }
 
+/** A TikTok @name as typed or pasted: no spaces, no leading @ (TikTok names have neither). '' when nothing is left. */
+export const cleanHandle = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, '').replace(/^@+/, '').slice(0, 60) : '')
+
 export interface Data {
   version: 1
   accounts: Account[]

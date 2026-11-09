@@ -35,6 +35,7 @@ function Card({ a, i, active, go, openDialog }: { a: AccountView; i: number; act
           <div className="glass menu" onClick={(e) => e.stopPropagation()}>
             {item(<Pencil size={15} />, 'Переименовать', () => openDialog({ kind: 'rename', acct: a }))}
             {item(<LogIn size={15} />, 'Войти заново', open)}
+            {a.verified && item(<ShieldCheck size={15} />, 'Подтвердить заново', () => { call('account:unverify', { id: a.id }); open() })}
             {item(<Bug size={15} />, 'Открыть сессию для диагностики', () => { open(); setTimeout(() => call('account:devtools'), 300) })}
             <hr />
             {item(<Eraser size={15} />, 'Удалить данные сессии…', () => openDialog({ kind: 'wipe', acct: a }))}

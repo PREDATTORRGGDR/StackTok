@@ -2,7 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell } from 'electro
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { ACCENTS, AccountView, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
+import { ACCENTS, AccountView, cleanHandle, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES } from '../shared/types'
 import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
 import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
 import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
@@ -288,11 +288,17 @@ const handlers: Record<string, Handler> = {
   // The user confirms which TikTok account this session belongs to; we never assume it.
   'account:confirm': (a: { id: string; username?: string; avatar?: string }) => {
     const acc = account(a?.id)
-    acc.username = typeof a.username === 'string' ? a.username.replace(/^@/, '').slice(0, 60) || undefined : undefined
+    acc.username = cleanHandle(a.username) || undefined
     acc.avatar = typeof a.avatar === 'string' && /^https:\/\//.test(a.avatar) ? a.avatar : acc.avatar
     acc.verified = true
     store.save(); push()
     refreshAvatar(acc.id)
+  },
+  // The user wants to confirm the account again (wrong name saved): the Browse page asks for it once more.
+  'account:unverify': (a: { id: string }) => {
+    const acc = account(a?.id)
+    acc.verified = false
+    store.save(); push()
   },
   // Removing keeps the stored browser profile unless `wipe` is explicitly set.
   'account:remove': async (a: { id: string; wipe?: boolean }) => {
