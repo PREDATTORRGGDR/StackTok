@@ -261,11 +261,11 @@ export function App() {
             )}
             <WinControls maximized={s.maximized} />
           </header>
-          <div className={'content' + (page === 'browse' || page === 'downloader' ? ' frame-wrap' : '')}>
+          <div className={'content' + (page === 'browse' ? ' frame-wrap' : '')}>
             {page === 'accounts' && <Accounts s={s} go={setPage} openDialog={open} />}
             {page === 'browse' && <Browse active={active} go={setPage} openDialog={open} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} assist={s.assist} hasKey={s.hasPsyKey} />}
             {page === 'tools' && <ToolsPage s={s} active={active} go={setPage} openDialog={open} />}
-            {page === 'downloader' && <DownloaderPage />}
+            {page === 'downloader' && <DownloaderPage s={s} />}
             {page === 'settings' && <SettingsPage s={s} />}
           </div>
         </main>

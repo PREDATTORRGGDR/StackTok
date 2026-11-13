@@ -356,3 +356,27 @@ export interface WatchdogJob {
   notify: boolean // Windows notifications about new events
   status: 'idle' | 'running'
 }
+
+/** One video in the downloader as the UI sees it (the file address never leaves main). */
+export interface DlItem {
+  id: string
+  url: string
+  status: 'loading' | 'ready' | 'downloading' | 'done' | 'error'
+  error?: string
+  warning?: string
+  author?: string
+  nickname?: string
+  desc?: string
+  tags?: string[]
+  music?: string
+  duration?: number
+  createdAt?: number
+  cover?: string
+  stats?: { plays: number; likes: number; comments: number; shares: number; saves: number }
+  quality?: string
+  size?: number // bytes expected (0 = unknown)
+  received: number
+  speed: number // bytes per second
+  file?: string // base name of the saved file
+}
+export interface DlState { items: DlItem[]; dir: string }

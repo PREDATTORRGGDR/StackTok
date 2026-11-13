@@ -1,11 +1,11 @@
-import { BrowserWindow, Notification, app, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { BrowserWindow, Notification, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { ACCENTS, AccountView, cleanHandle, AssistState, BACKGROUNDS, Bounds, CHAT_TEXT_SIZES, CHAT_WALLPAPERS, ChatExportProgress, cleanRange, GLASS_MATERIALS, HEX, Job, OPEN_IN, PSY_PRESETS, PSY_PRESET_INFO, PsyJob, API_PROFILES_MAX, ApiCheck, ApiProfile, activeProfile, SWEEP_KINDS, SessionState, Settings, SweepJob, SweepKind, THEMES, WatchdogJob } from '../shared/types'
 import { accountProfile, accountReposts, accountVideos, stopCounting } from './account-stats-run'
 import { AVATAR_EVERY, AVATAR_SWEEP, pickAvatar } from './avatars'
-import { Browse, HOME_URL, accountPage, configureSession, sessionState, startUrl } from './browse'
+import { Browse, HOME_URL, accountPage, configureSession, partitionFor, sessionState, startUrl } from './browse'
 import { ChatDump, ExportEntry, Person, renderChatHtml } from './chat-export-html'
 import { chatInfo, collectChat, embedMedia } from './chat-export'
 import { ChatOverlay } from './chat-overlay'
@@ -138,7 +138,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData'), watchdog: watchdog?.view() ?? null, watchdogOpen: wdOpen }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData'), watchdog: watchdog?.view() ?? null, watchdogOpen: wdOpen, dl: downloader?.view() ?? { items: [], dir: '' } }
 }
 
 let pushing = false
@@ -367,12 +367,17 @@ const handlers: Record<string, Handler> = {
   'browse:muted': () => browse.isMuted(),
   'browse:toggleMute': () => browse.toggleMute(),
 
-  'downloader:bounds': (b: Bounds | null) => downloader.setBounds(toBounds(b)),
-  'downloader:nav': (a: 'back' | 'forward' | 'reload' | 'home') => {
-    need(['back', 'forward', 'reload', 'home'].includes(a), 'Bad action.')
-    downloader.nav(a)
-  },
-  'downloader:external': () => downloader.openExternal(),
+  // Own downloader: a link (typed or from the clipboard) → the page is read → the file without the watermark is saved. Only user actions start anything.
+  'downloader:add': (a: { text: string; start?: boolean }) => { need(isStr(a?.text, 2000), 'Вставьте ссылку на видео TikTok.'); downloader.add(a.text, !!a.start) },
+  'downloader:clip': () => downloader.clip(),
+  'downloader:start': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.start(a.id) },
+  'downloader:startAll': () => downloader.startAll(),
+  'downloader:cancel': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.cancel(a.id) },
+  'downloader:remove': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.remove(a.id) },
+  'downloader:clear': () => downloader.clear(),
+  'downloader:reveal': (a: { id?: string }) => downloader.reveal(isStr(a?.id, 64) ? a.id : undefined),
+  'downloader:play': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.play(a.id) },
+  'downloader:dir': () => downloader.pickDir(),
 
   'settings:set': (s: Partial<Settings>) => {
     const cur = store.data.settings
@@ -849,7 +854,7 @@ function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   win.on('closed', () => app.quit())
-  downloader = new Downloader(win)
+  downloader = new Downloader(win, push, () => store.data.accounts.filter((a) => sessions.get(a.id) === 'logged_in').map((a) => session.fromPartition(partitionFor(a.id))))
   browse = new Browse(win, () => store.data.settings.muteByDefault, (wc) => overlay.attach(wc), (id) => store.data.accounts.find((x) => x.id === id)?.openIn ?? 'studio', (id) => {
     notice = { id: (notice?.id ?? 0) + 1, text: `«${store.data.accounts.find((x) => x.id === id)?.label ?? 'Аккаунт'}»: TikTok не отдал страницу (403). Открыт Studio, попробуйте «Домой» позже.` }
     push()
@@ -878,5 +883,5 @@ app.whenReady().then(() => {
   setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
-app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush(); watchdog?.destroy() })
+app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush(); watchdog?.destroy(); downloader?.stopAll() })
 app.on('window-all-closed', () => app.quit())
