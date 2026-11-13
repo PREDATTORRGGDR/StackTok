@@ -182,9 +182,13 @@ export class Downloader {
     else { mkdir(this.dir, { recursive: true }).then(() => shell.openPath(this.dir)).catch(() => {}) }
   }
 
-  play(id: string) {
+  /** Opens the file in the default player; if the system has none for this type (or refuses), shows it in the folder and says so. */
+  async play(id: string) {
     const f = this.rows.find((r) => r.pub.id === id)?.pub.file
-    if (f && existsSync(join(this.dir, basename(f)))) shell.openPath(join(this.dir, basename(f)))
+    const path = f ? join(this.dir, basename(f)) : ''
+    if (!path || !existsSync(path)) throw new Error('Файл не найден: его могли переместить или удалить.')
+    const err = await shell.openPath(path)
+    if (err) { shell.showItemInFolder(path); throw new Error('Не нашлось программы для этого файла, показываю его в папке.') }
   }
 
   async pickDir() {

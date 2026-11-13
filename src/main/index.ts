@@ -1,4 +1,4 @@
-import { BrowserWindow, Notification, app, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
+import { BrowserWindow, Notification, app, dialog, ipcMain, nativeTheme, net, protocol, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
@@ -18,9 +18,14 @@ import { findSweep } from './sweep-run'
 import { Provider, PsyError, Vlm, parseHandle, profileOf } from './psycho'
 import { KeyRing, runPortrait } from './psycho-run'
 import { baseOf, checkKey } from './api-check'
+import { pathToFileURL } from 'node:url'
 import { Downloader } from './downloader'
+import { SoundCloud } from './soundcloud'
 import { Store } from './store'
 import { WatchdogRunner } from './watchdog-run'
+
+// In-app player: the page asks for stacktok-audio://a/<id> and main serves only the file of a track the downloader saved itself (Range works, so seeking does).
+protocol.registerSchemesAsPrivileged([{ scheme: 'stacktok-audio', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, bypassCSP: false } }])
 
 const DEV = !app.isPackaged
 
@@ -32,6 +37,7 @@ let store: Store
 let browse: Browse
 let overlay: ChatOverlay
 let downloader: Downloader
+let soundcloud: SoundCloud
 let notice: { id: number; text: string } | null = null // one-off message for the UI, shown as a toast
 let chatExport: { progress: ChatExportProgress; cancelled: boolean } | null = null // the running chat export, if any
 let reposts: { job: Job; cleaner?: RepostCleaner; stop: boolean } | null = null // at most one repost cleanup at a time
@@ -138,7 +144,7 @@ function watchSession(id: string) {
 function snapshot() {
   const d = store.data
   const accounts: AccountView[] = d.accounts.map((a) => ({ ...a, session: sessions.get(a.id) ?? 'unknown' }))
-  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData'), watchdog: watchdog?.view() ?? null, watchdogOpen: wdOpen, dl: downloader?.view() ?? { items: [], dir: '' } }
+  return { accounts, settings: d.settings, notice, chatExport: chatExport?.progress ?? null, job: reposts?.job ?? null, sweep: sweep?.job ?? null, psy: psy?.job ?? null, assist: assistView(), hasPsyKey: !!keys && keys.has(activeProfile(d.settings).id), apiKeys: keys?.ids() ?? [], apiUsage: d.apiUsage, apiChecks: checks, activeAccountId: d.activeAccountId, maximized: !!win && !win.isDestroyed() && win.isMaximized(), version: app.getVersion(), dataPath: app.getPath('userData'), watchdog: watchdog?.view() ?? null, watchdogOpen: wdOpen, dl: downloader?.view() ?? { items: [], dir: '' }, sc: soundcloud?.view() ?? { items: [], dir: '' } }
 }
 
 let pushing = false
@@ -376,8 +382,18 @@ const handlers: Record<string, Handler> = {
   'downloader:remove': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.remove(a.id) },
   'downloader:clear': () => downloader.clear(),
   'downloader:reveal': (a: { id?: string }) => downloader.reveal(isStr(a?.id, 64) ? a.id : undefined),
-  'downloader:play': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); downloader.play(a.id) },
+  'downloader:play': async (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); return downloader.play(a.id) },
   'downloader:dir': () => downloader.pickDir(),
+  // SoundCloud downloader: same shape, own list and folder
+  'soundcloud:add': (a: { text: string; start?: boolean }) => { need(isStr(a?.text, 2000), 'Вставьте ссылку на трек SoundCloud.'); soundcloud.add(a.text, !!a.start) },
+  'soundcloud:clip': () => soundcloud.clip(),
+  'soundcloud:start': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); soundcloud.start(a.id) },
+  'soundcloud:startAll': () => soundcloud.startAll(),
+  'soundcloud:cancel': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); soundcloud.cancel(a.id) },
+  'soundcloud:remove': (a: { id: string }) => { need(isStr(a?.id, 64), 'Bad id.'); soundcloud.remove(a.id) },
+  'soundcloud:clear': () => soundcloud.clear(),
+  'soundcloud:reveal': (a: { id?: string }) => soundcloud.reveal(isStr(a?.id, 64) ? a.id : undefined),
+  'soundcloud:dir': () => soundcloud.pickDir(),
 
   'settings:set': (s: Partial<Settings>) => {
     const cur = store.data.settings
@@ -848,12 +864,13 @@ function createWindow() {
   wc.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' } })
   if (!DEV) {
     wc.session.webRequest.onHeadersReceived((d, cb) => cb({
-      responseHeaders: { ...d.responseHeaders, 'Content-Security-Policy': ["default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'"] }
+      responseHeaders: { ...d.responseHeaders, 'Content-Security-Policy': ["default-src 'self'; img-src 'self' data: https:; media-src 'self' blob: stacktok-audio:; connect-src 'self' stacktok-audio:; style-src 'self' 'unsafe-inline'"] }
     }))
   }
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
   win.on('closed', () => app.quit())
+  soundcloud = new SoundCloud(win, push)
   downloader = new Downloader(win, push, () => store.data.accounts.filter((a) => sessions.get(a.id) === 'logged_in').map((a) => session.fromPartition(partitionFor(a.id))))
   browse = new Browse(win, () => store.data.settings.muteByDefault, (wc) => overlay.attach(wc), (id) => store.data.accounts.find((x) => x.id === id)?.openIn ?? 'studio', (id) => {
     notice = { id: (notice?.id ?? 0) + 1, text: `«${store.data.accounts.find((x) => x.id === id)?.label ?? 'Аккаунт'}»: TikTok не отдал страницу (403). Открыт Studio, попробуйте «Домой» позже.` }
@@ -866,6 +883,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  protocol.handle('stacktok-audio', (req) => {
+    const path = soundcloud?.fileOf(decodeURIComponent(new URL(req.url).pathname.replace(/^\//, '')))
+    if (!path) return new Response('not found', { status: 404 })
+    return net.fetch(pathToFileURL(path).href, { headers: req.headers })
+  })
   store = new Store(join(app.getPath('userData'), 'stacktok.json'))
   overlay = new ChatOverlay(() => store.data.settings, join(app.getPath('userData'), 'chat-wallpaper.txt'), DEV ? new URL(HOME_URL).origin : undefined)
   keys = new KeyRing(join(app.getPath('userData'), 'api-keys.bin'), { file: join(app.getPath('userData'), 'psy-key.bin'), id: activeProfile(store.data.settings).id })
@@ -883,5 +905,5 @@ app.whenReady().then(() => {
   setInterval(() => store.data.accounts.forEach((a) => refreshAvatar(a.id)), AVATAR_SWEEP)
 })
 
-app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush(); watchdog?.destroy(); downloader?.stopAll() })
+app.on('before-quit', () => { store?.flush(); talks?.flush(); copies?.flush(); watchdog?.destroy(); downloader?.stopAll(); soundcloud?.stopAll() })
 app.on('window-all-closed', () => app.quit())

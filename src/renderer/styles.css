@@ -637,3 +637,18 @@ body.as-dragging { cursor: ew-resize; user-select: none; }
 .dl-acts .btn { justify-content: center; }
 .dl-acts .row2 { display: flex; gap: 8px; justify-content: center; }
 @media (max-width: 1050px) { .dl-opts { grid-template-columns: 1fr; } .dl-card { flex-wrap: wrap; } .dl-acts { flex-direction: row; width: 100%; min-width: 0; justify-content: flex-start; } }
+
+/* SoundCloud downloader: the same cards, square cover, warm accent */
+.dl.sc { --sc: 255, 106, 0; }
+.dl.sc .dl-live i { background: rgb(var(--sc)); box-shadow: 0 0 0 0 rgba(var(--sc), 0.5); }
+.dl.sc .dl-track i { background: linear-gradient(90deg, rgb(var(--sc)), #ffb066); }
+.dl-cover.sq { aspect-ratio: 1 / 1; width: 120px; height: 120px; }
+.dl-cover.sq img { width: 100%; height: 100%; object-fit: cover; }
+.sc-card .dl-who { font-size: 16px; }
+
+/* In-app audio player */
+.sc-player { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 12px; border-radius: 999px; background: rgba(var(--ink), 0.06); border: 1px solid var(--stroke); animation: rise 0.3s var(--ease); flex-wrap: wrap; }
+.sc-player .btn.round { width: 36px; height: 36px; padding: 0; justify-content: center; flex: none; }
+.sc-time { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); min-width: 34px; }
+.sc-player input[type=range] { flex: 1; min-width: 120px; height: 6px; border-radius: 999px; appearance: none; background: linear-gradient(90deg, rgb(var(--sc, 255, 106, 0)) var(--p, 0%), rgba(var(--ink), 0.15) var(--p, 0%)); outline: none; cursor: pointer; }
+.sc-player input[type=range]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.4); }

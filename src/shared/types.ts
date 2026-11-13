@@ -380,3 +380,27 @@ export interface DlItem {
   file?: string // base name of the saved file
 }
 export interface DlState { items: DlItem[]; dir: string }
+
+/** One SoundCloud track in the downloader (stream addresses and the client id never leave main). */
+export interface ScItem {
+  id: string
+  url: string
+  status: 'loading' | 'ready' | 'downloading' | 'done' | 'error'
+  error?: string
+  warning?: string
+  title?: string
+  artist?: string
+  cover?: string
+  duration?: number
+  genre?: string
+  tags?: string[]
+  createdAt?: string
+  stats?: { plays: number; likes: number; comments: number; reposts: number }
+  quality?: string
+  size?: number
+  received: number
+  speed: number
+  pct: number // 0..100, -1 = unknown
+  file?: string
+}
+export interface ScState { items: ScItem[]; dir: string }

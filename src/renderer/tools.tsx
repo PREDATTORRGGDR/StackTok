@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { BarChart3, Bot, Clapperboard, Download, Eye, FileDown, Heart, MessageCircle, Repeat2, Sparkles } from 'lucide-react'
+import { BarChart3, Bot, Clapperboard, Download, Eye, FileDown, Heart, MessageCircle, Music, Repeat2, Sparkles } from 'lucide-react'
 import { AccountView } from '@shared/types'
 import { AppState, call, toast } from './api'
 import type { Dialog } from './Dialogs'
@@ -91,8 +91,13 @@ export const TOOLS: Tool[] = [
     run: (c) => { call('account:page', { id: c.acct!.id, value: 'studio' }); c.go('browse') }
   },
   {
-    id: 'downloader', group: 'Файлы', title: 'Загрузчик видео', icon: <Download size={20} />,
+    id: 'downloader', group: 'Файлы', title: 'Загрузчик TikTok', icon: <Download size={20} />,
     desc: 'Свой загрузчик: ссылка из буфера, видео без водяного знака в лучшем качестве, хэштеги и статистика.',
     run: (c) => c.go('downloader')
+  },
+  {
+    id: 'soundcloud', group: 'Файлы', title: 'Загрузчик SoundCloud', icon: <Music size={20} />,
+    desc: 'Треки и подборки SoundCloud: ссылка из буфера, лучшее качество, название и обложка в теге.',
+    run: (c) => c.go('soundcloud')
   }
 ]

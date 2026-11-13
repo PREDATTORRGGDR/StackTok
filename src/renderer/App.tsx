@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Copy, Download, Globe, Layers, LayoutGrid, Minus, Plus, Settings as Cog, Sparkles, Square, Users, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Copy, Download, Globe, Layers, LayoutGrid, Minus, Music, Plus, Settings as Cog, Sparkles, Square, Users, X } from 'lucide-react'
 import { ACCENT_COLORS, BG_SOLID } from '@shared/types'
 import { AppState, call, toast, useAppState, useToasts } from './api'
 import { Dialog, Dialogs } from './Dialogs'
@@ -12,11 +12,12 @@ import { Accounts } from './pages/Accounts'
 import { ToolsPage } from './pages/Tools'
 import { Browse, progressText } from './pages/Browse'
 import { DownloaderPage } from './pages/Downloader'
+import { SoundCloudPage } from './pages/SoundCloud'
 import { SettingsPage } from './pages/Settings'
 import { Avatar } from './ui'
 
-export type Page = 'accounts' | 'browse' | 'tools' | 'downloader' | 'settings'
-const TITLES: Record<Page, string> = { accounts: 'Аккаунты', browse: 'Обзор', tools: 'Инструменты', downloader: 'Загрузчик', settings: 'Настройки' }
+export type Page = 'accounts' | 'browse' | 'tools' | 'downloader' | 'soundcloud' | 'settings'
+const TITLES: Record<Page, string> = { accounts: 'Аккаунты', browse: 'Обзор', tools: 'Инструменты', downloader: 'Загрузчик TikTok', soundcloud: 'Загрузчик SoundCloud', settings: 'Настройки' }
 
 const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
 const mix = (c: number[], to: number, t: number) => c.map((v) => Math.round(v + (to - v) * t))
@@ -229,6 +230,7 @@ export function App() {
             {nav('browse', <Globe size={17} />)}
             {nav('tools', <LayoutGrid size={17} />)}
             {nav('downloader', <Download size={17} />)}
+            {nav('soundcloud', <Music size={17} />)}
           </div>
           <div className="section-title">
             Быстрое переключение
@@ -266,6 +268,7 @@ export function App() {
             {page === 'browse' && <Browse active={active} go={setPage} openDialog={open} exporting={s.chatExport} reposting={s.job?.status === 'running'} analyzing={s.psy?.status === 'running'} assist={s.assist} hasKey={s.hasPsyKey} />}
             {page === 'tools' && <ToolsPage s={s} active={active} go={setPage} openDialog={open} />}
             {page === 'downloader' && <DownloaderPage s={s} />}
+            {page === 'soundcloud' && <SoundCloudPage s={s} />}
             {page === 'settings' && <SettingsPage s={s} />}
           </div>
         </main>

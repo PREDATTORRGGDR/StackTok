@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AccountView, ApiCheck, ApiUsage, AssistState, ChatExportProgress, DlState, Job, PsyJob, Settings, SweepJob, WatchdogJob } from '@shared/types'
+import { AccountView, ApiCheck, ApiUsage, AssistState, ChatExportProgress, DlState, Job, ScState, PsyJob, Settings, SweepJob, WatchdogJob } from '@shared/types'
 
 export interface AppState {
   accounts: AccountView[]
@@ -13,6 +13,7 @@ export interface AppState {
   watchdog: WatchdogJob | null
   watchdogOpen: number // grows when a watchdog notification is clicked
   dl: DlState // own video downloader
+  sc: ScState // SoundCloud downloader
   hasPsyKey: boolean // the active API profile has a key (keys themselves never reach the UI)
   apiKeys: string[] // ids of the profiles that have a key
   apiUsage: Record<string, ApiUsage> // tokens spent through the app, by profile
